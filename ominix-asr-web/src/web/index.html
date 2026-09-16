@@ -197,11 +197,14 @@ function connectWS() {
     if (m.type === 'partial' && m.text) {
       $('livePlaceholder').style.display = 'none';
       $('liveText').style.display = 'block';
+      $('liveText').classList.add('partial');
       $('liveText').textContent = m.text;
     } else if (m.type === 'final' && m.text) {
-      $('livePlaceholder').style.display = 'block';
-      $('liveText').style.display = 'none';
-      $('liveText').textContent = '';
+      // final 也显示在中间区域(短句没有 partial 时同样可见)
+      $('livePlaceholder').style.display = 'none';
+      $('liveText').style.display = 'block';
+      $('liveText').classList.remove('partial');
+      $('liveText').textContent = m.text;
       addSegment(m.text, null, m.ts, null, m.id);
     } else if (m.type === 'enhanced' && m.id !== undefined) {
       const seg = document.querySelector(`.seg[data-id="${m.id}"]`);
@@ -221,6 +224,11 @@ function connectWS() {
           raw.className = 'raw';
           raw.textContent = txt.dataset.orig || '';
           body.appendChild(raw);
+        }
+        // 同步刷新中间 live 区域
+        if ($('liveText').textContent === (txt.dataset.orig || '')) {
+          $('liveText').textContent = txt.textContent;
+          $('liveText').classList.remove('partial');
         }
       }
     } else if (m.type === 'polish_status') {

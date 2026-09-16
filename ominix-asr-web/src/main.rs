@@ -175,7 +175,7 @@ impl Vad {
             if self.in_speech {
                 self.utterance_samples += FRAME;
                 let buffered = self.buffer.len();
-                if buffered as f32 / 16000.0 >= 4.0 && buffered - self.partial_at >= 3 * 16000 {
+                if buffered as f32 / 16000.0 >= 2.0 && buffered - self.partial_at >= 2 * 16000 {
                     self.partial_at = buffered;
                     events.push(VadEvent::Partial(self.buffer.clone()));
                 }
