@@ -457,14 +457,20 @@ async fn api_domain(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
 
 async fn index() -> impl IntoResponse {
     (
-        [("content-type", "text/html; charset=utf-8")],
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "no-store, no-cache, must-revalidate"),
+        ],
         include_str!("web/index.html"),
     )
 }
 
 async fn subtitle_page() -> impl IntoResponse {
     (
-        [("content-type", "text/html; charset=utf-8")],
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "no-store, no-cache, must-revalidate"),
+        ],
         include_str!("web/subtitle.html"),
     )
 }
