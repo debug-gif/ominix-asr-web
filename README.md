@@ -6,7 +6,9 @@ Real-time speech recognition WebUI on Apple Silicon (M1/M2/M3/M4), built in pure
 
 ## Features
 
-- **Real-time ASR** — Qwen3-ASR 0.6B (8-bit), 30+ languages, ~10-20x realtime on M4
+- **Real-time ASR** — Qwen3-ASR 0.6B (8-bit), ~10-20x realtime on M4
+- **Auto language detection** — 30+ languages, no need to pick (manual override available)
+- **Audio source selection** — microphone (per-device picker) or system audio (screen/tab capture via `getDisplayMedia`)
 - **AI polishing** — removes filler words & repetitions, fixes homophone/transcription errors by context (Qwen3-1.7B-4bit), toggleable
 - **Domain optimization** — `domain.txt` config: system prompt injection + terminology fuzzy correction (edit the file, hot-reloads within 5s)
 - **Transcript saving** — manual save / auto-save to `transcripts/`, download in browser

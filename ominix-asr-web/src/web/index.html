@@ -78,7 +78,8 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
   <div class="panel">
     <div class="controls">
       <select id="lang">
-        <option value="Chinese" selected>中文</option>
+        <option value="Auto" selected>语言自动识别</option>
+        <option value="Chinese">中文</option>
         <option value="English">English</option>
         <option value="Japanese">日本語</option>
         <option value="Korean">한국어</option>
@@ -88,6 +89,12 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
         <option value="Spanish">Español</option>
         <option value="Russian">Русский</option>
       </select>
+      <select id="sourceMode" title="音频来源">
+        <option value="mic" selected>麦克风</option>
+        <option value="system">系统音频(屏幕共享)</option>
+      </select>
+      <select id="deviceSel" title="录音设备"></select>
+      <button id="btnRefreshDevices" title="刷新设备列表">⟳设备</button>
       <button class="primary" id="btnMic">开始录音</button>
       <button id="btnSave">保存转写</button>
       <button id="btnDownload">下载最近保存</button>
@@ -144,10 +151,14 @@ function toast(msg, ms = 2600) {
 }
 
 function setMic(on) {
-  $('micBadge').textContent = on ? '● 录音中' : '● 麦克风未开启';
+  const sourceMode = $('sourceMode').value === 'system' ? '系统音频' : '麦克风';
+  $('micBadge').textContent = on ? `● ${sourceMode}录音中` : '● 未采集';
   $('micBadge').className = 'badge ' + (on ? 'on' : 'off');
   $('btnMic').textContent = on ? '停止录音' : '开始录音';
   $('btnMic').classList.toggle('primary', !on);
+  $('sourceMode').disabled = on;
+  $('deviceSel').disabled = on || $('sourceMode').value === 'system';
+  $('btnRefreshDevices').disabled = on;
 }
 
 function setModel(loaded, loading) {
@@ -228,14 +239,40 @@ function updateCount() {
 }
 
 async function startMic() {
+  const sourceMode = $('sourceMode').value;
+  let stream = null;
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-    });
+    if (sourceMode === 'system') {
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: false, audio: true });
+      } catch (e1) {
+        // 部分浏览器不支持纯音频共享, 回退到带视频的屏幕共享(仅使用其音频轨)
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      }
+    } else {
+      const deviceId = $('deviceSel').value;
+      const constraints = {
+        audio: {
+          channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true
+        }
+      };
+      if (deviceId && deviceId !== 'default') constraints.audio.deviceId = { exact: deviceId };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (e1) {
+        // 指定设备失败时回退默认设备
+        toast('所选设备不可用，已回退默认麦克风');
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    }
   } catch (e) {
-    toast('无法访问麦克风: ' + e.message + '（请通过 http://localhost 访问并授权）', 5000);
+    toast('无法获取音频: ' + e.message + '（麦克风请授权；系统音频请使用 Chrome/Edge 并勾选"共享音频"）', 5000);
     return;
   }
+  micStream = stream;
+  const track = stream.getAudioTracks()[0];
+  if (track) track.onended = () => { toast('音频源已断开'); stopMic(); };
+
   try { audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 }); }
   catch (e) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
   const src = audioCtx.createMediaStreamSource(micStream);
@@ -322,6 +359,35 @@ $('lang').onchange = () => {
   lang = $('lang').value;
   if (ws && wsReady) ws.send(JSON.stringify({type:'lang', lang}));
 };
+$('sourceMode').onchange = () => { setMic(false); };
+$('deviceSel').onchange = () => { setMic(false); };
+$('btnRefreshDevices').onclick = () => listDevices(true);
+
+async function listDevices(verbose) {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter(d => d.kind === 'audioinput');
+    const sel = $('deviceSel');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    if (inputs.length === 0) {
+      sel.innerHTML = '<option value="default">默认麦克风</option>';
+    } else {
+      for (const d of inputs) {
+        const o = document.createElement('option');
+        o.value = d.deviceId;
+        o.textContent = d.label || `设备 ${d.deviceId.slice(0, 8)}…`;
+        sel.appendChild(o);
+      }
+    }
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    if (verbose) toast(`发现 ${inputs.length || 1} 个输入设备`);
+  } catch (e) {
+    toast('枚举设备失败: ' + e.message);
+  }
+}
+navigator.mediaDevices.addEventListener('devicechange', () => listDevices(false));
+listDevices(false);
 $('btnSave').onclick = async () => {
   const r = await fetch('/api/save', { method: 'POST' });
   const j = await r.json();

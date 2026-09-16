@@ -169,11 +169,16 @@ fn load(model_dir: &PathBuf) -> Result<PolishModel, String> {
 }
 
 fn polish(state: &mut PolishModel, text: &str, language: &str) -> Result<String, String> {
-    let system = if language == "Chinese" {
-        ZH_SYSTEM
+    // "Auto" 语言识别: 按转写文本的书写系统选择润色提示词
+    let use_zh = if language == "Chinese" {
+        true
+    } else if language == "Auto" {
+        text.chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
     } else {
-        EN_SYSTEM
+        false
     };
+    let system = if use_zh { ZH_SYSTEM } else { EN_SYSTEM };
     let user_msg = format!("{system}\n\n以下是需要整理的语音转写草稿：\n{text}");
 
     let conversations = vec![Conversation {
