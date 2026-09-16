@@ -73,6 +73,7 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
       <span class="badge off" id="micBadge">● 麦克风未开启</span>
       <span class="badge off" id="modelBadge">ASR 未加载</span>
       <span class="badge off" id="polishBadge">增强未加载</span>
+      <span class="badge" id="memBadge">内存 -</span>
       <span class="badge" id="idleBadge">空闲 -</span>
     </div>
   </header>
@@ -502,6 +503,8 @@ async function pollStatus() {
     }
     const t = j.idle_timeout_secs;
     $('idleBadge').textContent = t ? `空闲 ${Math.floor(j.idle_secs / 60)}m${j.idle_secs % 60}s / ${Math.floor(t / 60)}min 卸载` : '空闲卸载已关闭';
+    $('memBadge').textContent = `显存 活动${(j.mem_active_mb / 1024).toFixed(2)}G 缓存${(j.mem_cache_mb / 1024).toFixed(2)}G`;
+    $('memBadge').className = 'badge ' + (j.mem_active_mb > j.mem_limit_mb * 0.8 ? 'err' : '');
   } catch {}
 }
 

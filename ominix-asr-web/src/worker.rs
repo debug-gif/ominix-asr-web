@@ -6,9 +6,7 @@ use std::thread::JoinHandle;
 
 use qwen3_asr_mlx::Qwen3ASR;
 
-extern "C" {
-    fn mlx_clear_cache() -> i32;
-}
+use crate::mem;
 
 pub enum Cmd {
     Transcribe {
@@ -39,13 +37,14 @@ impl AsrWorker {
         model_dir: PathBuf,
         events: tokio::sync::broadcast::Sender<String>,
         mlx_lock: Arc<Mutex<()>>,
+        purge_threshold: usize,
     ) -> Self {
         let (tx, rx) = channel::<Cmd>();
         let model_loaded = Arc::new(AtomicBool::new(false));
         let flag = model_loaded.clone();
         let handle = std::thread::Builder::new()
             .name("asr-worker".into())
-            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock))
+            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock, purge_threshold))
             .expect("failed to spawn asr worker");
         AsrWorker {
             tx,
@@ -96,6 +95,7 @@ fn worker_loop(
     model_loaded: Arc<AtomicBool>,
     events: tokio::sync::broadcast::Sender<String>,
     mlx_lock: Arc<Mutex<()>>,
+    purge_threshold: usize,
 ) {
     let mut model: Option<Qwen3ASR> = None;
     while let Ok(cmd) = rx.recv() {
@@ -142,13 +142,28 @@ fn worker_loop(
                 } else {
                     Some(system.trim())
                 };
-                let config = qwen3_asr_mlx::SamplingConfig::default();
+                // 限制最大输出 token, 防止极端情况 KV 缓存膨胀 (默认 8192 → 1024)
+                let config = qwen3_asr_mlx::SamplingConfig {
+                    temperature: 0.0,
+                    max_tokens: 1024,
+                };
                 let result = model
                     .as_mut()
                     .unwrap()
                     .transcribe_samples_with_system(&samples, &language, system_prompt, &config)
                     .map(correct_terms_with(&terms))
                     .map_err(|e| format!("转写失败: {e}"));
+                // 内存监控: 缓存池超过阈值时清理 (含图编译缓存)
+                let (active, cache) = mem::snapshot();
+                if cache > purge_threshold {
+                    mem::purge_caches();
+                    eprintln!(
+                        "[asr] 内存缓存清理: active={}MB cache={}MB (阈值 {}MB)",
+                        active / 1048576,
+                        cache / 1048576,
+                        purge_threshold / 1048576
+                    );
+                }
                 if let Ok(text) = &result {
                     eprintln!(
                         "[asr] {}s audio -> {} ({}ms, {:.1}x realtime)",
@@ -168,9 +183,7 @@ fn worker_loop(
                         serde_json::json!({"type":"status","model_loaded":false,"loading":false})
                             .to_string(),
                     );
-                    unsafe {
-                        mlx_clear_cache();
-                    }
+                    mem::purge_caches();
                     eprintln!("[asr] mlx memory cache cleared");
                 }
             }

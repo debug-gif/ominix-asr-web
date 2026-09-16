@@ -69,6 +69,8 @@ Created automatically on first run. Edit with any text editor; changes apply aut
 | `OMINIX_LANGUAGE` | `Chinese` | Default language |
 | `OMINIX_TRANSCRIPTS_DIR` | `transcripts/` | Transcript save dir |
 | `OMINIX_DOMAIN_FILE` | `domain.txt` | Domain config file |
+| `OMINIX_MLX_MEMORY_LIMIT_MB` | `4096` | MLX active-memory soft limit (MB); exceeded → cache auto-freed |
+| `OMINIX_MLX_PURGE_THRESHOLD_MB` | `768` | Purge MLX cache + compile cache when cached memory exceeds this (MB) |
 | `OMINIX_AUTO_OPEN` | `1` | `0` disables auto-opening browser |
 | `MLX_PREBUILT_PATH` | (auto-download) | Dir with `libmlx.a`, `libmlxc.a`, `mlx.metallib` |
 

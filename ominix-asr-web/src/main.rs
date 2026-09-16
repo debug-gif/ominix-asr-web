@@ -1,4 +1,5 @@
 mod domain;
+mod mem;
 mod polish;
 mod worker;
 
@@ -30,6 +31,8 @@ struct Settings {
     idle_timeout_secs: u64,
     transcripts_dir: PathBuf,
     language: String,
+    mlx_memory_limit_mb: usize,
+    mlx_purge_threshold_mb: usize,
 }
 
 impl Settings {
@@ -59,6 +62,14 @@ impl Settings {
                 std::env::var("OMINIX_TRANSCRIPTS_DIR").unwrap_or_else(|_| "transcripts".into()),
             )),
             language: std::env::var("OMINIX_LANGUAGE").unwrap_or_else(|_| "Chinese".into()),
+            mlx_memory_limit_mb: std::env::var("OMINIX_MLX_MEMORY_LIMIT_MB")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(4096),
+            mlx_purge_threshold_mb: std::env::var("OMINIX_MLX_PURGE_THRESHOLD_MB")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(768),
         }
     }
 
@@ -292,6 +303,9 @@ struct StatusResp {
     idle_timeout_secs: u64,
     segments: usize,
     last_saved: Option<String>,
+    mem_active_mb: u64,
+    mem_cache_mb: u64,
+    mem_limit_mb: u64,
 }
 
 async fn api_status(State(state): State<Arc<AppState>>) -> Json<StatusResp> {
@@ -307,6 +321,9 @@ async fn api_status(State(state): State<Arc<AppState>>) -> Json<StatusResp> {
             .lock()
             .ok()
             .and_then(|p| p.clone()),
+        mem_active_mb: mem::active_mb(),
+        mem_cache_mb: mem::cache_mb(),
+        mem_limit_mb: state.settings.mlx_memory_limit_mb as u64,
     })
 }
 
@@ -666,9 +683,21 @@ async fn main() {
     let (events, _) = broadcast::channel::<String>(64);
     // MLX C++ 运行时非线程安全, ASR 与增强线程共享此锁串行化
     let mlx_lock: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
-    let worker = AsrWorker::start(settings.model_dir.clone(), events.clone(), mlx_lock.clone());
-    let polish =
-        PolishWorker::start(settings.polish_model_dir.clone(), events.clone(), mlx_lock);
+    // MLX 内存软上限: 超过时自动释放缓存池
+    mem::set_memory_limit(settings.mlx_memory_limit_mb * 1048576);
+    let purge_threshold = settings.mlx_purge_threshold_mb * 1048576;
+    let worker = AsrWorker::start(
+        settings.model_dir.clone(),
+        events.clone(),
+        mlx_lock.clone(),
+        purge_threshold,
+    );
+    let polish = PolishWorker::start(
+        settings.polish_model_dir.clone(),
+        events.clone(),
+        mlx_lock,
+        purge_threshold,
+    );
     let polish_available = settings.polish_available();
 
     if !polish_available {

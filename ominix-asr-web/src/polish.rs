@@ -12,9 +12,7 @@ use mlx_rs::transforms::eval;
 use mlx_rs::Array;
 use qwen3_mlx::{load_model, Generate, KVCache, Model};
 
-extern "C" {
-    fn mlx_clear_cache() -> i32;
-}
+use crate::mem;
 
 pub enum PolishCmd {
     Polish {
@@ -58,13 +56,14 @@ impl PolishWorker {
         model_dir: PathBuf,
         events: tokio::sync::broadcast::Sender<String>,
         mlx_lock: Arc<Mutex<()>>,
+        purge_threshold: usize,
     ) -> Self {
         let (tx, rx) = channel::<PolishCmd>();
         let model_loaded = Arc::new(AtomicBool::new(false));
         let flag = model_loaded.clone();
         let handle = std::thread::Builder::new()
             .name("polish-worker".into())
-            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock))
+            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock, purge_threshold))
             .expect("failed to spawn polish worker");
         PolishWorker {
             tx,
@@ -112,6 +111,7 @@ fn worker_loop(
     model_loaded: Arc<AtomicBool>,
     events: tokio::sync::broadcast::Sender<String>,
     mlx_lock: Arc<Mutex<()>>,
+    purge_threshold: usize,
 ) {
     let mut state: Option<PolishModel> = None;
     while let Ok(cmd) = rx.recv() {
@@ -161,6 +161,17 @@ fn worker_loop(
                     Err(e) => eprintln!("[polish] error: {e}"),
                 }
                 let _ = reply.send(result);
+                // 内存监控: 缓存池超过阈值时清理 (含图编译缓存)
+                let (active, cache) = mem::snapshot();
+                if cache > purge_threshold {
+                    mem::purge_caches();
+                    eprintln!(
+                        "[enhance] 内存缓存清理: active={}MB cache={}MB (阈值 {}MB)",
+                        active / 1048576,
+                        cache / 1048576,
+                        purge_threshold / 1048576
+                    );
+                }
             }
             PolishCmd::Translate {
                 text,
@@ -207,6 +218,17 @@ fn worker_loop(
                     Err(e) => eprintln!("[translate] error: {e}"),
                 }
                 let _ = reply.send(result);
+                // 内存监控: 缓存池超过阈值时清理 (含图编译缓存)
+                let (active, cache) = mem::snapshot();
+                if cache > purge_threshold {
+                    mem::purge_caches();
+                    eprintln!(
+                        "[enhance] 内存缓存清理: active={}MB cache={}MB (阈值 {}MB)",
+                        active / 1048576,
+                        cache / 1048576,
+                        purge_threshold / 1048576
+                    );
+                }
             }
             PolishCmd::Unload => {
                 let _mlx_guard = mlx_lock.lock().unwrap();
@@ -216,9 +238,7 @@ fn worker_loop(
                     let _ = events.send(
                         serde_json::json!({"type":"polish_status","loaded":false,"loading":false}).to_string(),
                     );
-                    unsafe {
-                        mlx_clear_cache();
-                    }
+                    mem::purge_caches();
                 }
             }
         }
