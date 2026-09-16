@@ -18,10 +18,29 @@ body {
 }
 #app {
   width: 100%; max-width: 1520px; margin: 0 auto;
-  display: grid; grid-template-columns: 300px 1fr 340px;
-  gap: 16px; align-items: start;
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px;
 }
-header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+#leftCol { width: 300px; min-width: 180px; }
+#midCol { flex: 1; min-width: 320px; }
+#rightCol { width: 340px; min-width: 180px; }
+header { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.grip {
+  width: 8px; align-self: stretch; cursor: col-resize; position: relative;
+  border-radius: 4px; flex: none; margin-top: 4px;
+}
+.grip::before {
+  content: ''; position: absolute; left: 50%; top: 0; bottom: 0;
+  transform: translateX(-50%); width: 1px; background: var(--border);
+  transition: width 0.15s, background 0.15s;
+}
+.grip::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%); width: 4px; height: 28px;
+  border-radius: 2px; background: var(--border); opacity: 0;
+  transition: opacity 0.15s;
+}
+.grip:hover::before, .grip.active::before { background: var(--accent); width: 2px; }
+.grip:hover::after, .grip.active::after { opacity: 1; background: var(--accent); }
 h1 { font-size: 20px; font-weight: 600; }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; }
 .badge {
@@ -77,8 +96,10 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
 #vumeter { width: 100%; height: 6px; background: #1e232e; border-radius: 3px; overflow: hidden; margin-top: 10px; }
 #vumeter .bar { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }
 @media (max-width: 1000px) {
-  #app { grid-template-columns: 1fr; }
-  header { grid-column: auto; }
+  #app { flex-direction: column; }
+  header { flex-basis: auto; }
+  .grip { display: none; }
+  #leftCol, #rightCol, #midCol { width: 100% !important; }
   .col.sticky { position: static; }
   .history, #summaryList { max-height: none; }
 }
@@ -100,8 +121,7 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
   </header>
 
   <!-- 左栏: 控制台 -->
-  <aside class="col sticky" id="leftCol">
-    <div class="panel">
+  <aside class="col sticky" id="leftCol">    <div class="panel">
       <div class="controls">
         <div class="row">
           <span class="lbl">识别语言</span>
@@ -169,6 +189,8 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
     </div>
   </aside>
 
+  <div class="grip" id="gripL" title="拖动调整宽度"></div>
+
   <!-- 中栏: 实时转写 -->
   <main class="col" id="midCol">
     <div class="panel live">
@@ -180,6 +202,8 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
       <div class="history" id="history"><div class="empty">暂无记录</div></div>
     </div>
   </main>
+
+  <div class="grip" id="gripR" title="拖动调整宽度"></div>
 
   <!-- 右栏: AI 摘要 + 导出 -->
   <aside class="col sticky" id="rightCol">
@@ -601,6 +625,48 @@ connectWS();
 pollStatus();
 timerPoll = setInterval(pollStatus, 5000);
 if ($('autoSave').checked) timerAuto = setInterval(() => fetch('/api/save', { method: 'POST' }), 60000);
+
+// ── 三栏宽度拖动调整 ────────────────────────────────────────────
+(function initGrips() {
+  const ls = JSON.parse(localStorage.getItem('ominix-cols') || '{}');
+  if (ls.l) $('leftCol').style.width = ls.l + 'px';
+  if (ls.r) $('rightCol').style.width = ls.r + 'px';
+
+  const save = () => localStorage.setItem('ominix-cols', JSON.stringify({
+    l: $('leftCol').offsetWidth, r: $('rightCol').offsetWidth
+  }));
+
+  [['gripL', 'leftCol', 1], ['gripR', 'rightCol', -1]].forEach(([gid, colId, dir]) => {
+    const grip = $(gid), col = $(colId);
+    grip.addEventListener('mousedown', e => {
+      e.preventDefault();
+      grip.classList.add('active');
+      const startX = e.clientX;
+      const startW = col.getBoundingClientRect().width;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      const move = ev => {
+        let w = startW + dir * (ev.clientX - startX);
+        w = Math.max(180, Math.min(700, w));
+        col.style.width = w + 'px';
+      };
+      const up = () => {
+        grip.classList.remove('active');
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        save();
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+    grip.addEventListener('dblclick', () => {
+      col.style.width = '';
+      save();
+    });
+  });
+})();
 </script>
 </body>
 </html>
