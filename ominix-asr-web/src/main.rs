@@ -699,9 +699,11 @@ async fn main() {
     // auto-open browser after a short delay (disable with OMINIX_AUTO_OPEN=0)
     let auto_open = std::env::var("OMINIX_AUTO_OPEN").map(|v| v != "0").unwrap_or(true);
     if auto_open {
-        println!("  5 秒后自动打开浏览器...");
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(5));
+            for i in (1..=5).rev() {
+                println!("  {i} 秒后自动打开浏览器...");
+                std::thread::sleep(Duration::from_secs(1));
+            }
             let url = format!("http://localhost:{port}");
             match std::process::Command::new("open").arg(&url).status() {
                 Ok(s) if s.success() => println!("已在浏览器打开 {url}"),
