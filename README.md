@@ -15,7 +15,10 @@ Real-time speech recognition + AI enhancement WebUI on Apple Silicon (M1/M2/M3/M
 ### AI 增强（按需加载，空闲自动卸载）
 - **润色 (polish)** — Qwen3-1.7B-4bit: removes filler words & repetitions, fixes homophone/transcription errors by context
 - **实时翻译 (translate)** — same model, 8 target languages; mutually exclusive with polishing
-- **AI 摘要 (summary)** — Qwen3-4B-4bit: 原文摘要 / 翻译摘要 / 两者都生成；输出核心主题、关键要点、结论、待办事项
+- **AI 摘要 (summary)** — Qwen3-4B-4bit, 按需加载：
+  - **类型**：会议摘要（结尾为**待办事项**）/ 内容摘要（结尾为**综合反思**）
+  - **方式**：原文摘要 / 翻译摘要（8 种目标语言）/ 两者都生成
+  - 结构：核心主题、关键要点、结论或决定、待办事项 / 综合反思
 - **Token 速度统计** — generation speed (tok/s) in terminal log and UI badge
 
 ### 界面与输出
@@ -109,7 +112,7 @@ Created automatically on first run. Edit with any text editor; changes apply aut
 |---|---|
 | `{"type":"lang","lang":"Auto"}` | Set recognition language |
 | `{"type":"enhance","mode":"polish\|translate\|off","target":"English"}` | Enhancement mode |
-| `{"type":"summarize","mode":"source\|translate\|both","target":"English"}` | Generate summary |
+| `{"type":"summarize","mode":"source\|translate\|both","target":"English","stype":"meeting\|content"}` | Generate summary (stype: meeting→action items / content→reflection) |
 | `{"type":"clear_summary"}` | Clear summaries |
 | `{"type":"reload_domain"}` | Reload `domain.txt` now |
 | `{"type":"save"}` / `{"type":"unload"}` / `{"type":"clear"}` | Same as REST |
