@@ -23,4 +23,9 @@ for f in config.json tokenizer.json tokenizer_config.json vocab.json merges.txt 
     download "mlx-community/Qwen3-1.7B-4bit" "qwen3-1.7b-4bit" "$f"
 done
 
+echo "Downloading summary model (Qwen3-4B-4bit, ~2.3 GB)..."
+for f in config.json tokenizer.json tokenizer_config.json vocab.json merges.txt model.safetensors model.safetensors.index.json; do
+    download "mlx-community/Qwen3-4B-4bit" "qwen3-4b-4bit" "$f"
+done
+
 echo "Done. Models installed under $MODELS"

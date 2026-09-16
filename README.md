@@ -9,7 +9,9 @@ Real-time speech recognition WebUI on Apple Silicon (M1/M2/M3/M4), built in pure
 - **Real-time ASR** — Qwen3-ASR 0.6B (8-bit), ~10-20x realtime on M4
 - **Auto language detection** — 30+ languages, no need to pick (manual override available)
 - **Audio source selection** — microphone (per-device picker) or system audio (screen/tab capture via `getDisplayMedia`)
+- **AI summary** — on-demand transcript summarization (core topics, key points, conclusions, todos) via Qwen3-4B-4bit, lazily loaded and idle-unloaded
 - **Subtitle mode** — detached floating subtitle window (desktop-lyrics style): large translation/polished text + small original text; adjustable font size, box size, background opacity, and position; Chrome supports always-on-top Picture-in-Picture window
+- **Three-column UI** — Codex-style layout: left console (source/device/language/enhance/domain), middle live transcript, right AI summary & export
 - **AI enhancement (same model, exclusive modes)** — Qwen3-1.7B-4bit powers both:
   - **润色 (polish)**: removes filler words & repetitions, fixes homophone/transcription errors by context
   - **实时翻译 (translate)**: translates transcriptions to a target language in real time (中/英/日/韩/德/法/西/俄)
@@ -63,7 +65,9 @@ Created automatically on first run. Edit with any text editor; changes apply aut
 | Variable | Default | Description |
 |---|---|---|
 | `OMINIX_ASR_MODEL` | `~/.OminiX/models/qwen3-asr-0.6b` | ASR model dir |
-| `OMINIX_POLISH_MODEL` | `~/.OminiX/models/qwen3-1.7b-4bit` | Polish LLM dir |
+| `OMINIX_POLISH_MODEL` | `~/.OminiX/models/qwen3-1.7b-4bit` | Polish/translate LLM dir |
+| `OMINIX_SUMMARY_MODEL` | `~/.OminiX/models/qwen3-4b-4bit` | Summary LLM dir |
+| `OMINIX_SUMMARY` | `1` | `0` disables AI summary |
 | `OMINIX_POLISH` | `1` | `0` disables AI polishing |
 | `OMINIX_PORT` | `8080` | HTTP port |
 | `OMINIX_IDLE_TIMEOUT` | `600` | Idle seconds before unloading models (0 = never) |

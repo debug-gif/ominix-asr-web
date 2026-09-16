@@ -1,6 +1,7 @@
 mod domain;
 mod mem;
 mod polish;
+mod summary;
 mod worker;
 
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use tokio::sync::broadcast;
 
 use domain::{file_mtime, load_domain_file, make_absolute, DomainConfig};
 use polish::PolishWorker;
+use summary::SummaryWorker;
 use worker::{idle_secs, touch, AsrWorker};
 
 // ── Settings ────────────────────────────────────────────────────
@@ -26,6 +28,7 @@ use worker::{idle_secs, touch, AsrWorker};
 struct Settings {
     model_dir: PathBuf,
     polish_model_dir: PathBuf,
+    summary_model_dir: PathBuf,
     domain_file: PathBuf,
     port: u16,
     idle_timeout_secs: u64,
@@ -46,6 +49,10 @@ impl Settings {
             polish_model_dir: PathBuf::from(
                 std::env::var("OMINIX_POLISH_MODEL")
                     .unwrap_or_else(|_| format!("{home}/.OminiX/models/qwen3-1.7b-4bit")),
+            ),
+            summary_model_dir: PathBuf::from(
+                std::env::var("OMINIX_SUMMARY_MODEL")
+                    .unwrap_or_else(|_| format!("{home}/.OminiX/models/qwen3-4b-4bit")),
             ),
             domain_file: make_absolute(PathBuf::from(
                 std::env::var("OMINIX_DOMAIN_FILE").unwrap_or_else(|_| "domain.txt".into()),
@@ -78,6 +85,12 @@ impl Settings {
             && self.polish_model_dir.join("config.json").exists()
             && self.polish_model_dir.join("model.safetensors").exists()
     }
+
+    fn summary_available(&self) -> bool {
+        std::env::var("OMINIX_SUMMARY").map(|v| v != "0").unwrap_or(true)
+            && self.summary_model_dir.join("config.json").exists()
+            && self.summary_model_dir.join("model.safetensors").exists()
+    }
 }
 
 // ── App state ───────────────────────────────────────────────────
@@ -101,10 +114,13 @@ struct DomainState {
 struct AppState {
     worker: AsrWorker,
     polish: PolishWorker,
+    summary: SummaryWorker,
     polish_available: bool,
+    summary_available: bool,
     settings: Settings,
     domain: Mutex<DomainState>,
     segments: Mutex<Vec<Segment>>,
+    summaries: Mutex<Vec<(String, String)>>,
     seg_id: AtomicU64,
     last_activity: Arc<Mutex<Instant>>,
     last_saved: Mutex<Option<String>>,
@@ -279,6 +295,16 @@ fn save_transcript(state: &Arc<AppState>) -> Result<String, String> {
             }
         }
     }
+    // 追加 AI 摘要
+    let summaries = state.summaries.lock().map_err(|_| "summaries lock poisoned".to_string())?;
+    if !summaries.is_empty() {
+        content.push_str("\n\n## AI 摘要\n\n");
+        for (ts, text) in summaries.iter() {
+            content.push_str(&format!("[{}]\n{}\n\n", ts, text));
+        }
+    }
+    drop(segments);
+    drop(summaries);
     std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))?;
     // 校验确实落盘
     let meta = std::fs::metadata(&path).map_err(|e| format!("写入后校验失败: {e}"))?;
@@ -299,6 +325,8 @@ struct StatusResp {
     model_loaded: bool,
     polish_loaded: bool,
     polish_available: bool,
+    summary_loaded: bool,
+    summary_available: bool,
     idle_secs: u64,
     idle_timeout_secs: u64,
     segments: usize,
@@ -313,6 +341,8 @@ async fn api_status(State(state): State<Arc<AppState>>) -> Json<StatusResp> {
         model_loaded: state.worker.model_loaded.load(Ordering::SeqCst),
         polish_loaded: state.polish.model_loaded.load(Ordering::SeqCst),
         polish_available: state.polish_available,
+        summary_loaded: state.summary.model_loaded.load(Ordering::SeqCst),
+        summary_available: state.summary_available,
         idle_secs: idle_secs(&state.last_activity),
         idle_timeout_secs: state.settings.idle_timeout_secs,
         segments: state.segments.lock().map(|s| s.len()).unwrap_or(0),
@@ -337,6 +367,7 @@ async fn api_save(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
 async fn api_unload(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     state.worker.unload();
     state.polish.unload();
+    state.summary.unload();
     Json(serde_json::json!({"ok": true}))
 }
 
@@ -610,10 +641,73 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     };
                                     let _ = socket.send(Message::Text(resp.to_string().into())).await;
                                 }
-                                "unload" => {
-                                    state.worker.unload();
-                                    state.polish.unload();
-                                }
+                                 "unload" => {
+                                     state.worker.unload();
+                                     state.polish.unload();
+                                     state.summary.unload();
+                                 }
+                                 "summarize" => {
+                                     if !state.summary_available {
+                                         let msg = serde_json::json!({
+                                             "type": "error",
+                                             "text": "总结模型不可用（未找到模型文件）"
+                                         });
+                                         let _ = socket.send(Message::Text(msg.to_string().into())).await;
+                                     } else {
+                                         // 汇总当前所有转写段(优先润色后文本)
+                                         let text = {
+                                             let segs = state.segments.lock().unwrap_or_else(|e| e.into_inner());
+                                             let joined: Vec<String> = segs
+                                                 .iter()
+                                                 .map(|s| {
+                                                     s.polished.clone().unwrap_or_else(|| s.text.clone())
+                                                 })
+                                                 .collect();
+                                             let mut t = joined.join("\n");
+                                             if t.chars().count() > 8000 {
+                                                 t = t.chars().take(8000).collect();
+                                             }
+                                             t
+                                         };
+                                         if text.trim().is_empty() {
+                                             let msg = serde_json::json!({
+                                                 "type": "error",
+                                                 "text": "暂无可总结的转写内容"
+                                             });
+                                             let _ = socket.send(Message::Text(msg.to_string().into())).await;
+                                         } else {
+                                             let st = state.clone();
+                                             tokio::spawn(async move {
+                                                 let st2 = st.clone();
+                                                 let text2 = text.clone();
+                                                 let result = tokio::task::spawn_blocking(move || {
+                                                     let rx = st2.summary.summarize(text2);
+                                                     rx.recv().ok().and_then(|r| r.ok())
+                                                 })
+                                                 .await
+                                                 .unwrap_or(None);
+                                                 match result {
+                                                     Some(out) if !out.trim().is_empty() => {
+                                                         let ts = Local::now().format("%H:%M:%S").to_string();
+                                                         if let Ok(mut list) = st.summaries.lock() {
+                                                             list.push((ts.clone(), out.clone()));
+                                                         }
+                                                         let _ = st.events.send(
+                                                             serde_json::json!({"type":"summary","text":out,"ts":ts})
+                                                                 .to_string(),
+                                                         );
+                                                     }
+                                                     _ => {
+                                                         let _ = st.events.send(
+                                                             serde_json::json!({"type":"error","text":"总结失败"})
+                                                                 .to_string(),
+                                                         );
+                                                     }
+                                                 }
+                                             });
+                                         }
+                                     }
+                                 }
                                 "polish" => {
                                     enhance_mode = if cmd.enabled.unwrap_or(true) {
                                         "polish".to_string()
@@ -702,13 +796,23 @@ async fn main() {
     let polish = PolishWorker::start(
         settings.polish_model_dir.clone(),
         events.clone(),
+        mlx_lock.clone(),
+        purge_threshold,
+    );
+    let summary = SummaryWorker::start(
+        settings.summary_model_dir.clone(),
+        events.clone(),
         mlx_lock,
         purge_threshold,
     );
     let polish_available = settings.polish_available();
+    let summary_available = settings.summary_available();
 
     if !polish_available {
         println!("提示: 未找到润色模型 ({}), AI 润色功能将不可用", settings.polish_model_dir.display());
+    }
+    if !summary_available {
+        println!("提示: 未找到总结模型 ({}), AI 总结功能将不可用", settings.summary_model_dir.display());
     }
 
     // 加载领域配置文件 (不存在则创建默认)
@@ -736,7 +840,9 @@ async fn main() {
     let state = Arc::new(AppState {
         worker,
         polish,
+        summary,
         polish_available,
+        summary_available,
         settings,
         domain: Mutex::new(DomainState {
             path: settings_domain_file.clone(),
@@ -744,6 +850,7 @@ async fn main() {
             config: domain_config,
         }),
         segments: Mutex::new(Vec::new()),
+        summaries: Mutex::new(Vec::new()),
         seg_id: AtomicU64::new(1),
         last_activity: Arc::new(Mutex::new(Instant::now())),
         last_saved: Mutex::new(None),
@@ -769,6 +876,9 @@ async fn main() {
                     }
                     if st.polish.model_loaded.load(Ordering::SeqCst) {
                         st.polish.unload();
+                    }
+                    if st.summary.model_loaded.load(Ordering::SeqCst) {
+                        st.summary.unload();
                     }
                 }
             }

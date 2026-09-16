@@ -14,10 +14,14 @@
 body {
   background: var(--bg); color: var(--text);
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  min-height: 100vh; display: flex; justify-content: center; padding: 24px 16px;
+  min-height: 100vh; padding: 20px 20px;
 }
-#app { width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 16px; }
-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+#app {
+  width: 100%; max-width: 1520px; margin: 0 auto;
+  display: grid; grid-template-columns: 300px 1fr 340px;
+  gap: 16px; align-items: start;
+}
+header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 h1 { font-size: 20px; font-weight: 600; }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; }
 .badge {
@@ -27,42 +31,57 @@ h1 { font-size: 20px; font-weight: 600; }
 .badge.on { color: var(--ok); border-color: var(--ok); }
 .badge.off { color: var(--warn); border-color: var(--warn); }
 .badge.err { color: var(--err); border-color: var(--err); }
-.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
-.controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.lbl { font-size: 12px; color: var(--dim); margin-right: -6px; }
-.history .seg .meta { font-size: 11px; color: var(--accent); margin-bottom: 2px; min-height: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+.col { display: flex; flex-direction: column; }
+.col.sticky { position: sticky; top: 16px; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.controls .row { width: 100%; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.lbl { font-size: 12px; color: var(--dim); }
 button, select {
-  font-size: 14px; padding: 9px 16px; border-radius: 10px; cursor: pointer;
+  font-size: 13px; padding: 8px 12px; border-radius: 8px; cursor: pointer;
   border: 1px solid var(--border); background: #1e232e; color: var(--text);
 }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 button.danger:hover { border-color: var(--err); color: var(--err); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-select { min-width: 110px; }
-label.small { font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+button.wide { width: 100%; margin-bottom: 8px; }
+select { flex: 1; min-width: 100px; }
+label.small { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
 .live {
-  min-height: 96px; font-size: 19px; line-height: 1.7;
+  min-height: 110px; font-size: 20px; line-height: 1.7;
   display: flex; align-items: center;
 }
 .live .placeholder { color: var(--dim); }
 .live .text { width: 100%; word-break: break-all; }
 .live .text.partial { color: #a9c2ff; }
-.history { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.panel h3 { font-size: 13px; color: var(--dim); margin-bottom: 12px; }
+.history { max-height: calc(100vh - 260px); overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .history .seg { display: flex; gap: 10px; font-size: 14px; line-height: 1.6; }
 .history .seg .ts { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 1px; }
 .history .seg .txt { word-break: break-all; }
 .history .seg .raw { color: var(--dim); font-size: 12px; margin-top: 2px; word-break: break-all; }
 .history .seg .raw::before { content: "原文: "; }
+.history .seg .meta { font-size: 11px; color: var(--accent); margin-bottom: 2px; min-height: 14px; }
 .empty { color: var(--dim); text-align: center; padding: 20px 0; font-size: 14px; }
+#summaryList { max-height: calc(100vh - 360px); overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+#summaryList .sum { background: #1e232e; border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+#summaryList .sum .sum-ts { font-size: 11px; color: var(--dim); margin-bottom: 6px; }
+#summaryLoading { color: var(--dim); font-size: 13px; text-align: center; padding: 10px; display: none; }
 #toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: #1e232e; border: 1px solid var(--accent); color: var(--text);
   padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none;
   max-width: 80vw; word-break: break-all; z-index: 10;
 }
-#vumeter { width: 100%; height: 6px; background: #1e232e; border-radius: 3px; overflow: hidden; }
+#vumeter { width: 100%; height: 6px; background: #1e232e; border-radius: 3px; overflow: hidden; margin-top: 10px; }
 #vumeter .bar { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }
+@media (max-width: 1000px) {
+  #app { grid-template-columns: 1fr; }
+  header { grid-column: auto; }
+  .col.sticky { position: static; }
+  .history, #summaryList { max-height: none; }
+}
 </style>
 </head>
 <body>
@@ -70,92 +89,115 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
   <header>
     <h1>OminiX 实时语音识别</h1>
     <div class="badges">
-      <span class="badge off" id="micBadge">● 麦克风未开启</span>
+      <span class="badge off" id="micBadge">● 未采集</span>
       <span class="badge off" id="modelBadge">ASR 未加载</span>
       <span class="badge off" id="polishBadge">增强未加载</span>
-      <span class="badge" id="memBadge">内存 -</span>
+      <span class="badge off" id="summaryBadge">摘要未加载</span>
       <span class="badge" id="tokBadge">生成速度 -</span>
+      <span class="badge" id="memBadge">内存 -</span>
       <span class="badge" id="idleBadge">空闲 -</span>
     </div>
   </header>
 
-  <div class="panel">
-    <div class="controls">
-      <span class="lbl">识别语言</span>
-      <select id="lang" title="识别语言">
-        <option value="Auto" selected>自动识别</option>
-        <option value="Chinese">中文</option>
-        <option value="English">English</option>
-        <option value="Japanese">日本語</option>
-        <option value="Korean">한국어</option>
-        <option value="Cantonese">粤语</option>
-        <option value="German">Deutsch</option>
-        <option value="French">Français</option>
-        <option value="Spanish">Español</option>
-        <option value="Russian">Русский</option>
-      </select>
-      <select id="sourceMode" title="音频来源">
-        <option value="mic" selected>麦克风</option>
-        <option value="system">系统音频(屏幕共享)</option>
-      </select>
-      <select id="deviceSel" title="录音设备"></select>
-      <button id="btnRefreshDevices" title="刷新设备列表">⟳设备</button>
-      <button class="primary" id="btnMic">开始录音</button>
-      <button id="btnSubtitle">字幕模式</button>
-      <button id="btnSave">保存转写</button>
-      <button id="btnDownload">下载最近保存</button>
-      <button class="danger" id="btnUnload">卸载模型</button>
-      <button class="danger" id="btnClear">清空</button>
-      <select id="enhanceMode" title="转写后处理">
-        <option value="polish" selected>AI润色</option>
-        <option value="translate">实时翻译</option>
-        <option value="off">关闭增强</option>
-      </select>
-      <span class="lbl" id="targetLbl" style="display:none">目标语言</span>
-      <select id="targetLang" title="翻译目标语言" style="display:none">
-        <option value="English" selected>English</option>
-        <option value="中文">中文</option>
-        <option value="日本語">日本語</option>
-        <option value="한국어">한국어</option>
-        <option value="Deutsch">Deutsch</option>
-        <option value="Français">Français</option>
-        <option value="Español">Español</option>
-        <option value="Русский">Русский</option>
-      </select>
-      <label class="small"><input type="checkbox" id="autoSave" checked> 自动保存(每60秒)</label>
+  <!-- 左栏: 控制台 -->
+  <aside class="col sticky" id="leftCol">
+    <div class="panel">
+      <div class="controls">
+        <div class="row">
+          <span class="lbl">识别语言</span>
+          <select id="lang" title="识别语言">
+            <option value="Auto" selected>自动识别</option>
+            <option value="Chinese">中文</option>
+            <option value="English">English</option>
+            <option value="Japanese">日本語</option>
+            <option value="Korean">한국어</option>
+            <option value="Cantonese">粤语</option>
+            <option value="German">Deutsch</option>
+            <option value="French">Français</option>
+            <option value="Spanish">Español</option>
+            <option value="Russian">Русский</option>
+          </select>
+        </div>
+        <div class="row">
+          <span class="lbl">音频源</span>
+          <select id="sourceMode" title="音频来源">
+            <option value="mic" selected>麦克风</option>
+            <option value="system">系统音频</option>
+          </select>
+          <select id="deviceSel" title="录音设备" style="flex:2"></select>
+          <button id="btnRefreshDevices" title="刷新设备">⟳</button>
+        </div>
+        <div class="row">
+          <span class="lbl">后处理</span>
+          <select id="enhanceMode" title="转写后处理">
+            <option value="polish" selected>AI润色</option>
+            <option value="translate">实时翻译</option>
+            <option value="off">关闭增强</option>
+          </select>
+          <span class="lbl" id="targetLbl" style="display:none">目标</span>
+          <select id="targetLang" title="翻译目标语言" style="display:none">
+            <option value="English" selected>English</option>
+            <option value="中文">中文</option>
+            <option value="日本語">日本語</option>
+            <option value="한국어">한국어</option>
+            <option value="Deutsch">Deutsch</option>
+            <option value="Français">Français</option>
+            <option value="Español">Español</option>
+            <option value="Русский">Русский</option>
+          </select>
+        </div>
+        <button class="primary wide" id="btnMic">开始录音</button>
+        <label class="small"><input type="checkbox" id="autoSave" checked> 自动保存(每60秒)</label>
+        <div id="vumeter"><div class="bar" id="vubar"></div></div>
+      </div>
     </div>
-    <div style="height:12px"></div>
-    <div id="vumeter"><div class="bar" id="vubar"></div></div>
-  </div>
 
-  <div class="panel">
-    <details id="domainPanel">
-      <summary style="cursor:pointer;font-size:14px;color:var(--dim)">领域优化</summary>
-      <div style="height:12px"></div>
-      <div style="font-size:12px;color:var(--dim);margin-bottom:8px">
-        配置来源: <span id="domainPath" style="color:var(--text)">加载中…</span><br>
-        直接用文本编辑器修改该文件，保存后 5 秒内自动生效（只读预览）：
-      </div>
-      <label style="font-size:13px;color:var(--dim)">[system] 领域提示词</label>
-      <textarea id="systemPrompt" rows="2" readonly style="width:100%;margin-top:6px;background:#1e232e;border:1px solid var(--border);border-radius:10px;color:var(--dim);padding:10px;font-size:13px;resize:vertical"></textarea>
-      <label style="font-size:13px;color:var(--dim);display:block;margin-top:12px">[terms] 术语表</label>
-      <textarea id="termsList" rows="5" readonly style="width:100%;margin-top:6px;background:#1e232e;border:1px solid var(--border);border-radius:10px;color:var(--dim);padding:10px;font-size:13px;resize:vertical"></textarea>
-      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
-        <button id="btnReloadDomain">重新加载配置</button>
-        <span id="domainStatus" style="font-size:12px;color:var(--dim)"></span>
-      </div>
-    </details>
-  </div>
+    <div class="panel">
+      <details id="domainPanel">
+        <summary style="cursor:pointer;font-size:13px;color:var(--dim)">领域优化（术语/上下文）</summary>
+        <div style="height:10px"></div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:8px">
+          配置: <span id="domainPath">加载中…</span>（编辑文件后 5 秒内自动生效）
+        </div>
+        <label style="font-size:12px;color:var(--dim)">[system] 提示词</label>
+        <textarea id="systemPrompt" rows="2" readonly style="width:100%;margin-top:4px;background:#1e232e;border:1px solid var(--border);border-radius:8px;color:var(--dim);padding:8px;font-size:12px;resize:vertical"></textarea>
+        <label style="font-size:12px;color:var(--dim);display:block;margin-top:10px">[terms] 术语表</label>
+        <textarea id="termsList" rows="4" readonly style="width:100%;margin-top:4px;background:#1e232e;border:1px solid var(--border);border-radius:8px;color:var(--dim);padding:8px;font-size:12px;resize:vertical"></textarea>
+        <button id="btnReloadDomain" style="margin-top:8px">重新加载配置</button>
+        <span id="domainStatus" style="font-size:11px;color:var(--dim)"></span>
+      </details>
+    </div>
+  </aside>
 
-  <div class="panel live">
-    <div class="placeholder" id="livePlaceholder">点击"开始录音"，说话后转写结果将实时显示在这里…</div>
-    <div class="text partial" id="liveText" style="display:none"></div>
-  </div>
+  <!-- 中栏: 实时转写 -->
+  <main class="col" id="midCol">
+    <div class="panel live">
+      <div class="placeholder" id="livePlaceholder">点击"开始录音"，说话后转写结果将实时显示在这里…</div>
+      <div class="text partial" id="liveText" style="display:none"></div>
+    </div>
+    <div class="panel">
+      <h3>转写记录 <span id="segCount" style="color:var(--text)"></span></h3>
+      <div class="history" id="history"><div class="empty">暂无记录</div></div>
+    </div>
+  </main>
 
-  <div class="panel">
-    <h3 style="font-size:14px;color:var(--dim);margin-bottom:12px">转写记录 <span id="segCount" style="color:var(--text)"></span></h3>
-    <div class="history" id="history"><div class="empty">暂无记录</div></div>
-  </div>
+  <!-- 右栏: AI 摘要 + 导出 -->
+  <aside class="col sticky" id="rightCol">
+    <div class="panel">
+      <h3>AI 摘要</h3>
+      <button class="primary wide" id="btnSummarize">生成摘要</button>
+      <div id="summaryLoading">正在生成摘要（首次需加载模型，约 3-5 秒）…</div>
+      <div id="summaryList"><div class="empty">转写完成后点"生成摘要"</div></div>
+    </div>
+    <div class="panel">
+      <h3>导出</h3>
+      <button class="wide" id="btnSubtitle">字幕模式</button>
+      <button class="wide" id="btnSave">保存转写</button>
+      <button class="wide" id="btnDownload">下载最近保存</button>
+      <button class="wide danger" id="btnUnload">卸载全部模型</button>
+      <button class="wide danger" id="btnClear">清空转写记录</button>
+    </div>
+  </aside>
 </div>
 
 <div id="toast"></div>
@@ -163,7 +205,7 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
 <script>
 const $ = id => document.getElementById(id);
 let ws = null, audioCtx = null, workletNode = null, micStream = null, scriptNode = null;
-let lang = 'Chinese', wsReady = false, timerAuto = null, timerPoll = null;
+let lang = 'Auto', wsReady = false, timerAuto = null, timerPoll = null;
 
 function toast(msg, ms = 2600) {
   const t = $('toast');
@@ -203,7 +245,6 @@ function connectWS() {
       $('liveText').classList.add('partial');
       $('liveText').textContent = m.text;
     } else if (m.type === 'final' && m.text) {
-      // final 也显示在中间区域(短句没有 partial 时同样可见)
       $('livePlaceholder').style.display = 'none';
       $('liveText').style.display = 'block';
       $('liveText').classList.remove('partial');
@@ -229,7 +270,6 @@ function connectWS() {
           raw.textContent = txt.dataset.orig || '';
           body.appendChild(raw);
         }
-        // 同步刷新中间 live 区域
         if ($('liveText').textContent === (txt.dataset.orig || '')) {
           $('liveText').textContent = txt.textContent;
           $('liveText').classList.remove('partial');
@@ -241,8 +281,16 @@ function connectWS() {
       if (m.loading) { b.textContent = '增强模型加载中…'; b.className = 'badge off'; }
       else if (m.loaded) { b.textContent = '增强模型已加载'; b.className = 'badge on'; }
       else { b.textContent = '增强模型未加载'; b.className = 'badge off'; }
+    } else if (m.type === 'summary_status') {
+      const b = $('summaryBadge');
+      if (m.loading) { b.textContent = '摘要模型加载中…'; b.className = 'badge off'; }
+      else if (m.loaded) { b.textContent = '摘要模型已加载'; b.className = 'badge on'; }
+      else { b.textContent = '摘要模型未加载'; b.className = 'badge off'; }
+    } else if (m.type === 'summary' && m.text) {
+      $('summaryLoading').style.display = 'none';
+      addSummary(m.text, m.ts);
     } else if (m.type === 'tok_stat') {
-      $('tokBadge').textContent = `生成速度 ${m.tok_s} tok/s (${m.tokens} tokens / ${m.secs}s)`;
+      $('tokBadge').textContent = `生成速度 ${m.tok_s} tok/s`;
     } else if (m.type === 'enhance_applied') {
       if (!m.available) toast('增强模型不可用（未找到模型文件）');
       $('enhanceMode').value = m.mode;
@@ -261,6 +309,7 @@ function connectWS() {
     } else if (m.type === 'context_applied') {
       $('domainStatus').textContent = `已应用: 提示词${m.system ? '✓' : '✗'} / ${m.terms} 个术语`;
     } else if (m.type === 'error') {
+      $('summaryLoading').style.display = 'none';
       toast('错误: ' + m.text, 4000);
     }
   };
@@ -293,6 +342,21 @@ function addSegment(text, enhanced, ts, label, id) {
   updateCount();
 }
 
+function addSummary(text, ts) {
+  const list = $('summaryList');
+  const empty = list.querySelector('.empty');
+  if (empty) empty.remove();
+  const d = document.createElement('div');
+  d.className = 'sum';
+  const hd = document.createElement('div');
+  hd.className = 'sum-ts';
+  hd.textContent = ts || '';
+  d.appendChild(hd);
+  d.appendChild(document.createTextNode(text));
+  list.appendChild(d);
+  list.scrollTop = list.scrollHeight;
+}
+
 function updateCount() {
   const n = $('history').querySelectorAll('.seg').length;
   $('segCount').textContent = n ? `(${n} 段)` : '';
@@ -306,7 +370,6 @@ async function startMic() {
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({ video: false, audio: true });
       } catch (e1) {
-        // 部分浏览器不支持纯音频共享, 回退到带视频的屏幕共享(仅使用其音频轨)
         stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       }
     } else {
@@ -320,7 +383,6 @@ async function startMic() {
       try {
         stream = await navigator.mediaDevices.getUserMedia(constraints);
       } catch (e1) {
-        // 指定设备失败时回退默认设备
         toast('所选设备不可用，已回退默认麦克风');
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       }
@@ -416,9 +478,8 @@ $('btnMic').onclick = () => {
   if (micStream) stopMic(); else startMic();
 };
 $('btnSubtitle').onclick = () => {
-  window.open('/subtitle', 'ominix-subtitle',
-    'width=720,height=240,resizable=yes');
-  toast('字幕窗口已打开（拖动窗口标题栏可移动；Chrome 可用置顶画中画）', 4000);
+  window.open('/subtitle', 'ominix-subtitle', 'width=720,height=240,resizable=yes');
+  toast('字幕窗口已打开（Chrome 可用置顶画中画）', 4000);
 };
 const subChan = new BroadcastChannel('ominix-sub');
 $('lang').onchange = () => {
@@ -469,6 +530,14 @@ $('btnClear').onclick = async () => {
   $('history').innerHTML = '<div class="empty">暂无记录</div>';
   updateCount();
 };
+$('btnSummarize').onclick = () => {
+  if (ws && wsReady) {
+    $('summaryLoading').style.display = 'block';
+    ws.send(JSON.stringify({type:'summarize'}));
+  } else {
+    toast('WebSocket 未连接');
+  }
+};
 $('autoSave').onchange = () => {
   clearInterval(timerAuto);
   if ($('autoSave').checked) timerAuto = setInterval(() => fetch('/api/save', { method: 'POST' }), 60000);
@@ -512,6 +581,14 @@ async function pollStatus() {
       $('enhanceMode').value = 'off';
       $('targetLang').style.display = 'none';
       $('targetLbl').style.display = 'none';
+    }
+    const sb = $('summaryBadge');
+    if (j.summary_available) {
+      sb.textContent = j.summary_loaded ? '摘要模型已加载' : '摘要模型未加载';
+      sb.className = 'badge ' + (j.summary_loaded ? 'on' : 'off');
+    } else {
+      sb.textContent = '摘要模型不可用';
+      sb.className = 'badge err';
     }
     const t = j.idle_timeout_secs;
     $('idleBadge').textContent = t ? `空闲 ${Math.floor(j.idle_secs / 60)}m${j.idle_secs % 60}s / ${Math.floor(t / 60)}min 卸载` : '空闲卸载已关闭';
