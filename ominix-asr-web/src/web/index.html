@@ -210,6 +210,14 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
     <div class="panel">
       <h3>AI 摘要</h3>
       <div class="row" style="margin-bottom:8px">
+        <span class="lbl">摘要类型</span>
+        <select id="summaryType" style="flex:1">
+          <option value="meeting" selected>会议摘要（待办事项）</option>
+          <option value="content">内容摘要（综合反思）</option>
+        </select>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <span class="lbl">摘要方式</span>
         <select id="summaryMode" style="flex:1">
           <option value="source" selected>原文摘要</option>
           <option value="translate">翻译摘要</option>
@@ -582,7 +590,8 @@ $('btnSummarize').onclick = () => {
     ws.send(JSON.stringify({
       type: 'summarize',
       mode: $('summaryMode').value,
-      target: $('summaryTarget').value
+      target: $('summaryTarget').value,
+      stype: $('summaryType').value
     }));
   } else {
     toast('WebSocket 未连接');

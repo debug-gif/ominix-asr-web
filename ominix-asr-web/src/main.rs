@@ -489,6 +489,8 @@ struct WsCmd {
     mode: Option<String>,
     #[serde(default)]
     target: Option<String>,
+    #[serde(default)]
+    stype: Option<String>,
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -725,27 +727,31 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                          } else {
                                              let mode = cmd.mode.clone().unwrap_or_else(|| "source".to_string());
                                              let target = cmd.target.clone().unwrap_or_else(|| "English".to_string());
-                                             // 决定要生成哪些摘要: (输出语言, 标签)
-                                             let mut jobs: Vec<(String, String)> = Vec::new();
+                                             let kind = cmd.stype.clone().unwrap_or_else(|| "meeting".to_string());
+                                             let type_label = if kind == "content" { "内容摘要" } else { "会议摘要" };
+                                             // 决定要生成哪些摘要: (输出语言, 标签, 类型)
+                                             let mut jobs: Vec<(String, String, String)> = Vec::new();
                                              match mode.as_str() {
-                                                 "translate" => jobs.push((target, "翻译摘要".to_string())),
+                                                 "translate" => jobs.push((target, format!("{type_label}(翻译)"), kind)),
                                                  "both" => {
-                                                     jobs.push(("source".to_string(), "原文摘要".to_string()));
-                                                     jobs.push((target, "翻译摘要".to_string()));
+                                                     jobs.push(("source".to_string(), format!("{type_label}(原文)"), kind.clone()));
+                                                     jobs.push((target, format!("{type_label}(翻译)"), kind));
                                                  }
-                                                 _ => jobs.push(("source".to_string(), "原文摘要".to_string())),
+                                                 _ => jobs.push(("source".to_string(), format!("{type_label}(原文)"), kind)),
                                              }
-                                             for (out_lang, label) in jobs {
+                                             for (out_lang, label, kind) in jobs {
                                                  let st = state.clone();
                                                  let text2 = text.clone();
                                                  let out_lang2 = out_lang.clone();
                                                  let label2 = label.clone();
+                                                 let kind2 = kind.clone();
                                                  tokio::spawn(async move {
                                                      let st2 = st.clone();
                                                      let text3 = text2.clone();
                                                      let out_lang3 = out_lang2.clone();
+                                                     let kind3 = kind2.clone();
                                                      let result = tokio::task::spawn_blocking(move || {
-                                                         let rx = st2.summary.summarize(text3, out_lang3);
+                                                         let rx = st2.summary.summarize(text3, out_lang3, kind3);
                                                          rx.recv().ok().and_then(|r| r.ok())
                                                      })
                                                      .await
