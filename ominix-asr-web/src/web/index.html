@@ -210,6 +210,7 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
     <div class="panel">
       <h3>AI 摘要</h3>
       <button class="primary wide" id="btnSummarize">生成摘要</button>
+      <button class="wide" id="btnSaveSummary">保存摘要</button>
       <div id="summaryLoading">正在生成摘要（首次需加载模型，约 3-5 秒）…</div>
       <div id="summaryList"><div class="empty">转写完成后点"生成摘要"</div></div>
     </div>
@@ -361,8 +362,9 @@ function addSegment(text, enhanced, ts, label, id) {
     body.appendChild(raw);
   }
   d.appendChild(t); d.appendChild(body);
-  h.appendChild(d);
-  h.scrollTop = h.scrollHeight;
+  // 最新内容插到最上方
+  h.insertBefore(d, h.firstChild);
+  h.scrollTop = 0;
   updateCount();
 }
 
@@ -561,6 +563,11 @@ $('btnSummarize').onclick = () => {
   } else {
     toast('WebSocket 未连接');
   }
+};
+$('btnSaveSummary').onclick = async () => {
+  const r = await fetch('/api/save_summary', { method: 'POST' });
+  const j = await r.json();
+  toast(j.ok ? '摘要已保存: ' + j.path : '保存失败: ' + (j.error || ''), 4000);
 };
 $('autoSave').onchange = () => {
   clearInterval(timerAuto);

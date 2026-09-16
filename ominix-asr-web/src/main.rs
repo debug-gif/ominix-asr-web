@@ -364,6 +364,47 @@ async fn api_save(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
     }
 }
 
+fn save_summary(state: &Arc<AppState>) -> Result<String, String> {
+    let summaries = state
+        .summaries
+        .lock()
+        .map_err(|_| "summaries lock poisoned".to_string())?;
+    if summaries.is_empty() {
+        return Err("暂无可保存的摘要（请先生成摘要）".into());
+    }
+    std::fs::create_dir_all(&state.settings.transcripts_dir)
+        .map_err(|e| format!("创建目录失败: {e}"))?;
+    let ts = Local::now().format("%Y%m%d_%H%M%S");
+    let path = state
+        .settings
+        .transcripts_dir
+        .join(format!("摘要_{ts}.txt"));
+    let mut content = String::new();
+    content.push_str("# AI 摘要记录\n");
+    content.push_str(&format!("# 保存时间: {}\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
+    content.push_str(&format!("# 共 {} 条\n\n", summaries.len()));
+    for (ts, text) in summaries.iter() {
+        content.push_str(&format!("[{}]\n{}\n\n", ts, text));
+    }
+    std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))?;
+    let meta = std::fs::metadata(&path).map_err(|e| format!("写入后校验失败: {e}"))?;
+    if meta.len() == 0 {
+        return Err("写入后文件为空".into());
+    }
+    let p = path.to_string_lossy().to_string();
+    if let Ok(mut last) = state.last_saved.lock() {
+        *last = Some(p.clone());
+    }
+    Ok(p)
+}
+
+async fn api_save_summary(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    match save_summary(&state) {
+        Ok(path) => Json(serde_json::json!({"ok": true, "path": path})),
+        Err(e) => Json(serde_json::json!({"ok": false, "error": e})),
+    }
+}
+
 async fn api_unload(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     state.worker.unload();
     state.polish.unload();
@@ -926,6 +967,7 @@ async fn main() {
         .route("/subtitle", get(subtitle_page))
         .route("/api/status", get(api_status))
         .route("/api/save", post(api_save))
+        .route("/api/save_summary", post(api_save_summary))
         .route("/api/unload", post(api_unload))
         .route("/api/clear", post(api_clear))
         .route("/api/download", get(api_download))
