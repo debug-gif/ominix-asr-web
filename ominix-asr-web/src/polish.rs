@@ -252,8 +252,10 @@ fn polish(state: &mut PolishModel, text: &str, language: &str) -> Result<String,
         false
     };
     let system = if use_zh { ZH_SYSTEM } else { EN_SYSTEM };
-    let user_msg = format!("{system}\n\n以下是需要整理的语音转写草稿：\n{text}");
-    run_llm(state, &user_msg)
+    let max_tokens = (text.chars().count() * 2).clamp(512, 2048);
+    let user_msg = format!("{system}\n\n待整理文本（引号内）：\n\"{text}\"\n\n请直接输出整理后的文本：");
+    let out = run_llm(state, &user_msg, max_tokens)?;
+    Ok(clean_output(&out))
 }
 
 fn translate(state: &mut PolishModel, text: &str, target: &str) -> Result<String, String> {
@@ -266,11 +268,70 @@ fn translate(state: &mut PolishModel, text: &str, target: &str) -> Result<String
     } else {
         format!("You are a professional translator. Translate the user's text into {target}. Keep the original meaning, preserve technical terms and numbers, and output only the translation.")
     };
-    let user_msg = format!("{system}\n\n{text}");
-    run_llm(state, &user_msg)
+    let max_tokens = (text.chars().count() * 2).clamp(512, 2048);
+    let user_msg = format!("{system}\n\n待翻译文本（引号内）：\n\"{text}\"\n\n请直接输出译文：");
+    let out = run_llm(state, &user_msg, max_tokens)?;
+    Ok(clean_output(&out))
 }
 
-fn run_llm(state: &mut PolishModel, user_msg: &str) -> Result<String, String> {
+/// 剥离常见的提示词泄漏片段（模型偶尔会回显指令前缀/客套话）
+fn clean_output(out: &str) -> String {
+    let mut s = out.trim().to_string();
+    let prefixes: &[&str] = &[
+        "好的，以下是翻译：",
+        "好的，以下是译文：",
+        "好的，以下是润色后的文本：",
+        "好的，以下是整理后的文本：",
+        "好的，以下是翻译结果：",
+        "以下是翻译：",
+        "以下是译文：",
+        "以下是翻译结果：",
+        "以下是润色后的文本：",
+        "以下是整理后的文本：",
+        "翻译如下：",
+        "译文如下：",
+        "翻译结果：",
+        "译文：",
+        "润色后的文本：",
+        "整理后的文本：",
+        "Sure, here is the translation:",
+        "Sure, here's the translation:",
+        "Here is the translation:",
+        "Here's the translation:",
+        "Translation:",
+        "Polished text:",
+    ];
+    let suffixes: &[&str] = &[
+        "希望对你有所帮助。",
+        "希望对您有帮助。",
+        "希望有帮助。",
+        "Hope this helps!",
+        "I hope this helps.",
+        "如有需要请告诉我。",
+        "如需要进一步调整请告诉我。",
+    ];
+    loop {
+        let mut changed = false;
+        for p in prefixes {
+            if s.starts_with(p) {
+                s = s[p.len()..].trim().to_string();
+                changed = true;
+            }
+        }
+        for suf in suffixes {
+            if s.ends_with(suf) {
+                s = s[..s.len() - suf.len()].trim().to_string();
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    s
+}
+
+fn run_llm(state: &mut PolishModel, user_msg: &str, max_tokens: usize) -> Result<String, String> {
     let conversations = vec![Conversation {
         role: Role::User,
         content: user_msg,
@@ -306,7 +367,6 @@ fn run_llm(state: &mut PolishModel, user_msg: &str) -> Result<String, String> {
     let mut cache: Vec<Option<KVCache>> = Vec::new();
     let generator = Generate::<KVCache>::new(&mut state.model, &mut cache, 0.3, &prompt_tokens);
 
-    let max_tokens = 512;
     let mut tokens: Vec<Array> = Vec::new();
     let mut last_ids: Vec<u32> = Vec::with_capacity(10);
     for token in generator {
@@ -345,5 +405,43 @@ fn run_llm(state: &mut PolishModel, user_msg: &str) -> Result<String, String> {
         Err("生成结果为空".to_string())
     } else {
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_leaked_prefixes() {
+        assert_eq!(
+            clean_output("好的，以下是翻译：今天天气很好。"),
+            "今天天气很好。"
+        );
+        assert_eq!(
+            clean_output("Here is the translation: The weather is nice."),
+            "The weather is nice."
+        );
+        assert_eq!(
+            clean_output("译文：这是测试。希望对你有所帮助。"),
+            "这是测试。"
+        );
+    }
+
+    #[test]
+    fn keeps_legit_content() {
+        assert_eq!(clean_output("今天天气很好。"), "今天天气很好。");
+        assert_eq!(
+            clean_output("OK, let's go."),
+            "OK, let's go."
+        );
+    }
+
+    #[test]
+    fn multiple_prefixes() {
+        assert_eq!(
+            clean_output("好的，以下是译文：译文：结果。"),
+            "结果。"
+        );
     }
 }
