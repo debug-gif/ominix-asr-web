@@ -9,6 +9,7 @@ Real-time speech recognition WebUI on Apple Silicon (M1/M2/M3/M4), built in pure
 - **Real-time ASR** — Qwen3-ASR 0.6B (8-bit), ~10-20x realtime on M4
 - **Auto language detection** — 30+ languages, no need to pick (manual override available)
 - **Audio source selection** — microphone (per-device picker) or system audio (screen/tab capture via `getDisplayMedia`)
+- **Subtitle mode** — detached floating subtitle window (desktop-lyrics style): large translation/polished text + small original text; adjustable font size, box size, background opacity, and position; Chrome supports always-on-top Picture-in-Picture window
 - **AI enhancement (same model, exclusive modes)** — Qwen3-1.7B-4bit powers both:
   - **润色 (polish)**: removes filler words & repetitions, fixes homophone/transcription errors by context
   - **实时翻译 (translate)**: translates transcriptions to a target language in real time (中/英/日/韩/德/法/西/俄)

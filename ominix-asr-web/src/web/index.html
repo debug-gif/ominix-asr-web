@@ -100,6 +100,7 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
       <select id="deviceSel" title="录音设备"></select>
       <button id="btnRefreshDevices" title="刷新设备列表">⟳设备</button>
       <button class="primary" id="btnMic">开始录音</button>
+      <button id="btnSubtitle">字幕模式</button>
       <button id="btnSave">保存转写</button>
       <button id="btnDownload">下载最近保存</button>
       <button class="danger" id="btnUnload">卸载模型</button>
@@ -207,6 +208,7 @@ function connectWS() {
       $('liveText').classList.remove('partial');
       $('liveText').textContent = m.text;
       addSegment(m.text, null, m.ts, null, m.id);
+      subChan.postMessage({ type: 'final', id: m.id, text: m.text, src_lang: m.src_lang });
     } else if (m.type === 'enhanced' && m.id !== undefined) {
       const seg = document.querySelector(`.seg[data-id="${m.id}"]`);
       if (seg) {
@@ -231,6 +233,7 @@ function connectWS() {
           $('liveText').textContent = txt.textContent;
           $('liveText').classList.remove('partial');
         }
+        subChan.postMessage(m);
       }
     } else if (m.type === 'polish_status') {
       const b = $('polishBadge');
@@ -409,6 +412,12 @@ function stopMic() {
 $('btnMic').onclick = () => {
   if (micStream) stopMic(); else startMic();
 };
+$('btnSubtitle').onclick = () => {
+  window.open('/subtitle', 'ominix-subtitle',
+    'width=720,height=240,resizable=yes');
+  toast('字幕窗口已打开（拖动窗口标题栏可移动；Chrome 可用置顶画中画）', 4000);
+};
+const subChan = new BroadcastChannel('ominix-sub');
 $('lang').onchange = () => {
   lang = $('lang').value;
   if (ws && wsReady) ws.send(JSON.stringify({type:'lang', lang}));

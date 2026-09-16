@@ -390,6 +390,13 @@ async fn index() -> impl IntoResponse {
     )
 }
 
+async fn subtitle_page() -> impl IntoResponse {
+    (
+        [("content-type", "text/html; charset=utf-8")],
+        include_str!("web/subtitle.html"),
+    )
+}
+
 // ── WebSocket ───────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -806,6 +813,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/subtitle", get(subtitle_page))
         .route("/api/status", get(api_status))
         .route("/api/save", post(api_save))
         .route("/api/unload", post(api_unload))

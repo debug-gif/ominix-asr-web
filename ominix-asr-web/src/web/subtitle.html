@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>字幕模式 - OminiX</title>
+<style>
+:root {
+  --bg-opacity: 0.55;
+  --align-v: center;
+  --align-h: center;
+  --box-w: 640px;
+  --box-h: auto;
+  --main-size: 48px;
+  --sub-size: 20px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: transparent; overflow: hidden; }
+body {
+  display: flex;
+  align-items: var(--align-v);
+  justify-content: var(--align-h);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  user-select: none;
+}
+#stage { position: relative; width: 100%; display: flex; flex-direction: column; align-items: var(--align-h); justify-content: var(--align-v); }
+#subBox {
+  width: var(--box-w); max-width: 96vw;
+  min-height: var(--box-h);
+  background: rgba(0, 0, 0, var(--bg-opacity));
+  border-radius: 14px;
+  padding: 18px 26px;
+  text-align: center;
+  display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center;
+  transition: opacity 0.3s;
+}
+#mainText {
+  font-size: var(--main-size); font-weight: 600; color: #fff; line-height: 1.35;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.9); word-break: break-word; max-width: 100%;
+}
+#subText {
+  font-size: var(--sub-size); color: rgba(255,255,255,0.72); line-height: 1.4;
+  word-break: break-word; max-width: 100%;
+}
+#metaText { font-size: 12px; color: rgba(255,255,255,0.5); }
+#placeholder { color: rgba(255,255,255,0.45); font-size: 22px; }
+#panel {
+  position: fixed; top: 6px; right: 6px; z-index: 100;
+  background: rgba(20,22,28,0.92); border: 1px solid #333; border-radius: 10px;
+  padding: 12px; color: #ddd; font-size: 13px; width: 260px;
+  display: none; flex-direction: column; gap: 8px;
+}
+#panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; white-space: nowrap; }
+#panel input[type=range] { width: 130px; }
+#panel button { background: #333; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+#gear {
+  position: fixed; top: 6px; right: 6px; z-index: 101; cursor: pointer;
+  background: rgba(20,22,28,0.7); border: 1px solid #444; color: #bbb;
+  border-radius: 50%; width: 28px; height: 28px; font-size: 14px; line-height: 26px; text-align: center;
+}
+body.show-panel #panel { display: flex; }
+#pipHint { font-size: 11px; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+  <div id="gear" title="字幕设置">⚙</div>
+  <div id="panel">
+    <label>大字字号 <input id="sMain" type="range" min="20" max="110" value="48"></label>
+    <label>小字字号 <input id="sSub" type="range" min="10" max="40" value="20"></label>
+    <label>框宽度 <input id="sWidth" type="range" min="320" max="1400" step="20" value="640"></label>
+    <label>背景透明度 <input id="sOpacity" type="range" min="0" max="100" value="55"></label>
+    <label>垂直位置
+      <select id="sValign">
+        <option value="flex-start">顶部</option>
+        <option value="center" selected>中部</option>
+        <option value="flex-end">底部</option>
+      </select>
+    </label>
+    <label>水平位置
+      <select id="sHalign">
+        <option value="flex-start">居左</option>
+        <option value="center" selected>居中</option>
+        <option value="flex-end">居右</option>
+      </select>
+    </label>
+    <button id="btnPip" style="display:none">置顶小窗 (画中画)</button>
+    <div id="pipHint">拖动窗口标题栏可移动本字幕窗；本窗口有原生边框，无法完全透明（浏览器限制）</div>
+  </div>
+  <div id="stage">
+    <div id="subBox">
+      <div id="placeholder">等待转写…</div>
+      <div id="mainText" style="display:none"></div>
+      <div id="subText" style="display:none"></div>
+      <div id="metaText"></div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const KEYS = ['mainSize','subSize','boxW','opacity','valign','halign'];
+let pipWin = null;
+
+function loadSettings() {
+  const s = JSON.parse(localStorage.getItem('ominix-sub-settings') || '{}');
+  if (s.mainSize) { $('sMain').value = s.mainSize; }
+  if (s.subSize) { $('sSub').value = s.subSize; }
+  if (s.boxW) { $('sWidth').value = s.boxW; }
+  if (s.opacity !== undefined) { $('sOpacity').value = s.opacity; }
+  if (s.valign) { $('sValign').value = s.valign; }
+  if (s.halign) { $('sHalign').value = s.halign; }
+  applySettings();
+}
+
+function applySettings() {
+  const r = document.documentElement.style;
+  r.setProperty('--main-size', $('sMain').value + 'px');
+  r.setProperty('--sub-size', $('sSub').value + 'px');
+  r.setProperty('--box-w', $('sWidth').value + 'px');
+  r.setProperty('--bg-opacity', $('sOpacity').value / 100);
+  r.setProperty('--align-v', $('sValign').value);
+  r.setProperty('--align-h', $('sHalign').value);
+  localStorage.setItem('ominix-sub-settings', JSON.stringify({
+    mainSize: $('sMain').value, subSize: $('sSub').value, boxW: $('sWidth').value,
+    opacity: $('sOpacity').value, valign: $('sValign').value, halign: $('sHalign').value
+  }));
+}
+
+['sMain','sSub','sWidth','sOpacity','sValign','sHalign'].forEach(id =>
+  $(id).addEventListener('input', applySettings));
+
+$('gear').onclick = () => document.body.classList.toggle('show-panel');
+
+function render(msg) {
+  const main = msg.translated || msg.polished || msg.text || '';
+  const raw = msg.text || '';
+  const ph = $('placeholder');
+  if (main) {
+    ph.style.display = 'none';
+    $('mainText').style.display = 'block';
+    $('mainText').textContent = main;
+  } else {
+    ph.style.display = 'block';
+    $('mainText').style.display = 'none';
+  }
+  if (raw && raw !== main) {
+    $('subText').style.display = 'block';
+    $('subText').textContent = raw;
+  } else {
+    $('subText').style.display = 'none';
+  }
+  $('metaText').textContent = msg.translated ? `译自: ${msg.src_lang || '自动'}` : (msg.polished ? '已润色' : '');
+  if (pipWin && !pipWin.closed) {
+    const w = pipWin;
+    w.document.getElementById('mainText').textContent = $('mainText').textContent;
+    w.document.getElementById('mainText').style.display = main ? 'block' : 'none';
+    w.document.getElementById('subText').textContent = $('subText').textContent;
+    w.document.getElementById('subText').style.display = (raw && raw !== main) ? 'block' : 'none';
+    w.document.getElementById('placeholder').style.display = main ? 'none' : 'block';
+    w.document.getElementById('metaText').textContent = $('metaText').textContent;
+  }
+}
+
+const chan = new BroadcastChannel('ominix-sub');
+chan.onmessage = ev => {
+  const m = ev.data;
+  if (m && (m.type === 'final' || m.type === 'enhanced')) render(m);
+};
+window.addEventListener('unload', () => chan.close());
+
+// Document Picture-in-Picture (Chrome): 真·置顶悬浮窗
+if (window.documentPictureInPicture) {
+  $('btnPip').style.display = '';
+  $('btnPip').onclick = async () => {
+    if (pipWin && !pipWin.closed) { pipWin.close(); pipWin = null; return; }
+    pipWin = await window.documentPictureInPicture.requestWindow({ width: 720, height: 220 });
+    const d = pipWin.document;
+    d.body.innerHTML = `
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { display: flex; align-items: center; justify-content: center; height: 100vh;
+          background: rgba(0,0,0,0.8); font-family: -apple-system, "PingFang SC", sans-serif; overflow: hidden; }
+        #mainText { font-size: 42px; font-weight: 600; color: #fff; text-align: center;
+          text-shadow: 0 2px 8px rgba(0,0,0,0.9); word-break: break-word; padding: 0 24px; }
+        #subText { font-size: 18px; color: rgba(255,255,255,0.7); text-align: center; word-break: break-word; padding: 0 24px; }
+        #metaText { font-size: 12px; color: rgba(255,255,255,0.5); text-align: center; }
+        #placeholder { color: rgba(255,255,255,0.4); font-size: 20px; text-align: center; }
+      </style>
+      <div id="wrap">
+        <div id="placeholder">等待转写…</div>
+        <div id="mainText" style="display:none"></div>
+        <div id="subText" style="display:none"></div>
+        <div id="metaText"></div>
+      </div>`;
+    render({ text: $('mainText').textContent || '', translated: $('mainText').textContent || '', src_lang: '' });
+    pipWin.addEventListener('pagehide', () => { pipWin = null; });
+  };
+}
+
+loadSettings();
+</script>
+</body>
+</html>
