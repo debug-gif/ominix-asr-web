@@ -19,6 +19,7 @@ use crate::mem;
 pub enum SummaryCmd {
     Summarize {
         text: String,
+        lang: String,
         reply: Sender<Result<String, String>>,
     },
     Unload,
@@ -36,9 +37,13 @@ struct SummaryModel {
     chat_template: String,
 }
 
-const SYSTEM: &str = "你是一位专业的会议记录整理助手。请对下面的语音转写记录进行总结，\
+const SYSTEM_ZH: &str = "你是一位专业的会议记录整理助手。请对下面的语音转写记录进行总结，\
 输出以下内容（用简洁的要点形式）：\n1. 核心主题\n2. 关键要点（3-6 条）\n3. 结论或决定\n4. 待办事项（如有）\n\
 直接输出总结，不要任何解释或客套话。";
+
+const SYSTEM_EN: &str = "You are a professional meeting-minutes assistant. Summarize the \
+following speech transcript and output (in concise bullet form):\n1. Core topic\n2. Key points (3-6)\n\
+3. Conclusions or decisions\n4. Action items (if any)\nOutput only the summary in English, with no explanation.";
 
 impl SummaryWorker {
     pub fn start(
@@ -61,9 +66,9 @@ impl SummaryWorker {
         }
     }
 
-    pub fn summarize(&self, text: String) -> Receiver<Result<String, String>> {
+    pub fn summarize(&self, text: String, lang: String) -> Receiver<Result<String, String>> {
         let (reply, recv) = channel();
-        let _ = self.tx.send(SummaryCmd::Summarize { text, reply });
+        let _ = self.tx.send(SummaryCmd::Summarize { text, lang, reply });
         recv
     }
 
@@ -83,7 +88,7 @@ fn worker_loop(
     let mut state: Option<SummaryModel> = None;
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            SummaryCmd::Summarize { text, reply } => {
+            SummaryCmd::Summarize { text, lang, reply } => {
                 let _mlx_guard = mlx_lock.lock().unwrap();
                 if state.is_none() {
                     eprintln!("[summary] model not loaded, loading from {}...", model_dir.display());
@@ -112,7 +117,7 @@ fn worker_loop(
                     }
                 }
                 let t0 = std::time::Instant::now();
-                let result = summarize(&mut state.as_mut().unwrap(), &text);
+                let result = summarize(&mut state.as_mut().unwrap(), &text, &lang);
                 let elapsed = t0.elapsed().as_secs_f32();
                 match &result {
                     Ok((out, tokens)) => {
@@ -170,9 +175,24 @@ fn load(model_dir: &PathBuf) -> Result<SummaryModel, String> {
     })
 }
 
-fn summarize(state: &mut SummaryModel, text: &str) -> Result<(String, usize), String> {
+fn summarize(state: &mut SummaryModel, text: &str, lang: &str) -> Result<(String, usize), String> {
+    // 按输出语言选择提示词: source 时按文本书写系统自动判断
+    let use_en = if lang == "English" {
+        true
+    } else if lang == "source" {
+        !text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    } else {
+        false
+    };
+    let system = if use_en {
+        SYSTEM_EN.to_string()
+    } else if lang == "Chinese" || lang == "source" {
+        SYSTEM_ZH.to_string()
+    } else {
+        format!("你是一位专业的会议记录整理助手。请用{lang}输出总结，格式为：核心主题、关键要点、结论、待办事项。直接输出，不要解释。")
+    };
     let max_tokens = 1024;
-    let user_msg = format!("{SYSTEM}\n\n语音转写记录：\n{text}");
+    let user_msg = format!("{system}\n\n语音转写记录：\n{text}");
     let conversations = vec![Conversation {
         role: Role::User,
         content: user_msg.as_str(),

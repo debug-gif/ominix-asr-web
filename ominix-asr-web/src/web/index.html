@@ -209,8 +209,25 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
   <aside class="col sticky" id="rightCol">
     <div class="panel">
       <h3>AI 摘要</h3>
+      <div class="row" style="margin-bottom:8px">
+        <select id="summaryMode" style="flex:1">
+          <option value="source" selected>原文摘要</option>
+          <option value="translate">翻译摘要</option>
+          <option value="both">两者都生成</option>
+        </select>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <span class="lbl">翻译语言</span>
+        <select id="summaryTarget" style="flex:1">
+          <option value="English" selected>English</option>
+          <option value="中文">中文</option>
+          <option value="日本語">日本語</option>
+          <option value="한국어">한국어</option>
+        </select>
+      </div>
       <button class="primary wide" id="btnSummarize">生成摘要</button>
       <button class="wide" id="btnSaveSummary">保存摘要</button>
+      <button class="wide danger" id="btnClearSummary">清空摘要</button>
       <div id="summaryLoading">正在生成摘要（首次需加载模型，约 3-5 秒）…</div>
       <div id="summaryList"><div class="empty">转写完成后点"生成摘要"</div></div>
     </div>
@@ -313,7 +330,9 @@ function connectWS() {
       else { b.textContent = '摘要模型未加载'; b.className = 'badge off'; }
     } else if (m.type === 'summary' && m.text) {
       $('summaryLoading').style.display = 'none';
-      addSummary(m.text, m.ts);
+      addSummary(m.text, m.ts, m.label);
+    } else if (m.type === 'summary_cleared') {
+      $('summaryList').innerHTML = '<div class="empty">转写完成后点"生成摘要"</div>';
     } else if (m.type === 'tok_stat') {
       $('tokBadge').textContent = `生成速度 ${m.tok_s} tok/s`;
     } else if (m.type === 'enhance_applied') {
@@ -368,7 +387,7 @@ function addSegment(text, enhanced, ts, label, id) {
   updateCount();
 }
 
-function addSummary(text, ts) {
+function addSummary(text, ts, label) {
   const list = $('summaryList');
   const empty = list.querySelector('.empty');
   if (empty) empty.remove();
@@ -376,11 +395,12 @@ function addSummary(text, ts) {
   d.className = 'sum';
   const hd = document.createElement('div');
   hd.className = 'sum-ts';
-  hd.textContent = ts || '';
+  hd.textContent = (label ? label + ' · ' : '') + (ts || '');
   d.appendChild(hd);
   d.appendChild(document.createTextNode(text));
-  list.appendChild(d);
-  list.scrollTop = list.scrollHeight;
+  // 最新摘要置顶
+  list.insertBefore(d, list.firstChild);
+  list.scrollTop = 0;
 }
 
 function updateCount() {
@@ -559,7 +579,19 @@ $('btnClear').onclick = async () => {
 $('btnSummarize').onclick = () => {
   if (ws && wsReady) {
     $('summaryLoading').style.display = 'block';
-    ws.send(JSON.stringify({type:'summarize'}));
+    ws.send(JSON.stringify({
+      type: 'summarize',
+      mode: $('summaryMode').value,
+      target: $('summaryTarget').value
+    }));
+  } else {
+    toast('WebSocket 未连接');
+  }
+};
+$('btnClearSummary').onclick = () => {
+  if (ws && wsReady) {
+    ws.send(JSON.stringify({ type: 'clear_summary' }));
+    $('summaryList').innerHTML = '<div class="empty">转写完成后点"生成摘要"</div>';
   } else {
     toast('WebSocket 未连接');
   }

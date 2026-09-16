@@ -120,7 +120,7 @@ struct AppState {
     settings: Settings,
     domain: Mutex<DomainState>,
     segments: Mutex<Vec<Segment>>,
-    summaries: Mutex<Vec<(String, String)>>,
+    summaries: Mutex<Vec<(String, String, String)>>,
     seg_id: AtomicU64,
     last_activity: Arc<Mutex<Instant>>,
     last_saved: Mutex<Option<String>>,
@@ -299,8 +299,8 @@ fn save_transcript(state: &Arc<AppState>) -> Result<String, String> {
     let summaries = state.summaries.lock().map_err(|_| "summaries lock poisoned".to_string())?;
     if !summaries.is_empty() {
         content.push_str("\n\n## AI 摘要\n\n");
-        for (ts, text) in summaries.iter() {
-            content.push_str(&format!("[{}]\n{}\n\n", ts, text));
+        for (ts, label, text) in summaries.iter() {
+            content.push_str(&format!("### {label} [{}]\n{}\n\n", ts, text));
         }
     }
     drop(segments);
@@ -383,8 +383,8 @@ fn save_summary(state: &Arc<AppState>) -> Result<String, String> {
     content.push_str("# AI 摘要记录\n");
     content.push_str(&format!("# 保存时间: {}\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
     content.push_str(&format!("# 共 {} 条\n\n", summaries.len()));
-    for (ts, text) in summaries.iter() {
-        content.push_str(&format!("[{}]\n{}\n\n", ts, text));
+    for (ts, label, text) in summaries.iter() {
+        content.push_str(&format!("## {label} [{}]\n{}\n\n", ts, text));
     }
     std::fs::write(&path, content).map_err(|e| format!("写入失败: {e}"))?;
     let meta = std::fs::metadata(&path).map_err(|e| format!("写入后校验失败: {e}"))?;
@@ -717,37 +717,63 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                              });
                                              let _ = socket.send(Message::Text(msg.to_string().into())).await;
                                          } else {
-                                             let st = state.clone();
-                                             tokio::spawn(async move {
-                                                 let st2 = st.clone();
-                                                 let text2 = text.clone();
-                                                 let result = tokio::task::spawn_blocking(move || {
-                                                     let rx = st2.summary.summarize(text2);
-                                                     rx.recv().ok().and_then(|r| r.ok())
-                                                 })
-                                                 .await
-                                                 .unwrap_or(None);
-                                                 match result {
-                                                     Some(out) if !out.trim().is_empty() => {
-                                                         let ts = Local::now().format("%H:%M:%S").to_string();
-                                                         if let Ok(mut list) = st.summaries.lock() {
-                                                             list.push((ts.clone(), out.clone()));
-                                                         }
-                                                         let _ = st.events.send(
-                                                             serde_json::json!({"type":"summary","text":out,"ts":ts})
-                                                                 .to_string(),
-                                                         );
-                                                     }
-                                                     _ => {
-                                                         let _ = st.events.send(
-                                                             serde_json::json!({"type":"error","text":"总结失败"})
-                                                                 .to_string(),
-                                                         );
-                                                     }
+                                             let mode = cmd.mode.clone().unwrap_or_else(|| "source".to_string());
+                                             let target = cmd.target.clone().unwrap_or_else(|| "English".to_string());
+                                             // 决定要生成哪些摘要: (输出语言, 标签)
+                                             let mut jobs: Vec<(String, String)> = Vec::new();
+                                             match mode.as_str() {
+                                                 "translate" => jobs.push((target, "翻译摘要".to_string())),
+                                                 "both" => {
+                                                     jobs.push(("source".to_string(), "原文摘要".to_string()));
+                                                     jobs.push((target, "翻译摘要".to_string()));
                                                  }
-                                             });
+                                                 _ => jobs.push(("source".to_string(), "原文摘要".to_string())),
+                                             }
+                                             for (out_lang, label) in jobs {
+                                                 let st = state.clone();
+                                                 let text2 = text.clone();
+                                                 let out_lang2 = out_lang.clone();
+                                                 let label2 = label.clone();
+                                                 tokio::spawn(async move {
+                                                     let st2 = st.clone();
+                                                     let text3 = text2.clone();
+                                                     let out_lang3 = out_lang2.clone();
+                                                     let result = tokio::task::spawn_blocking(move || {
+                                                         let rx = st2.summary.summarize(text3, out_lang3);
+                                                         rx.recv().ok().and_then(|r| r.ok())
+                                                     })
+                                                     .await
+                                                     .unwrap_or(None);
+                                                     match result {
+                                                         Some(out) if !out.trim().is_empty() => {
+                                                             let ts = Local::now().format("%H:%M:%S").to_string();
+                                                             if let Ok(mut list) = st.summaries.lock() {
+                                                                 list.push((ts.clone(), label2.clone(), out.clone()));
+                                                             }
+                                                             let _ = st.events.send(
+                                                                 serde_json::json!({"type":"summary","text":out,"ts":ts,"label":label2})
+                                                                     .to_string(),
+                                                             );
+                                                         }
+                                                         _ => {
+                                                             let _ = st.events.send(
+                                                                 serde_json::json!({"type":"error","text":format!("{label2}生成失败")})
+                                                                     .to_string(),
+                                                             );
+                                                         }
+                                                     }
+                                                 });
+                                             }
                                          }
                                      }
+                                 }
+                                 "clear_summary" => {
+                                     if let Ok(mut list) = state.summaries.lock() {
+                                         list.clear();
+                                     }
+                                     let _ = state.events.send(
+                                         serde_json::json!({"type":"summary_cleared"}).to_string(),
+                                     );
                                  }
                                 "polish" => {
                                     enhance_mode = if cmd.enabled.unwrap_or(true) {
