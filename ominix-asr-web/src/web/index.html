@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OminiX 实时语音识别</title>
+<style>
+:root {
+  --bg: #0f1115; --panel: #171a21; --border: #262b36;
+  --text: #e6e9ef; --dim: #8b93a5; --accent: #4f8cff;
+  --ok: #34c98e; --warn: #f0a35e; --err: #f0647a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh; display: flex; justify-content: center; padding: 24px 16px;
+}
+#app { width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 16px; }
+header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+h1 { font-size: 20px; font-weight: 600; }
+.badges { display: flex; gap: 8px; flex-wrap: wrap; }
+.badge {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--dim); white-space: nowrap;
+}
+.badge.on { color: var(--ok); border-color: var(--ok); }
+.badge.off { color: var(--warn); border-color: var(--warn); }
+.badge.err { color: var(--err); border-color: var(--err); }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+.controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+button, select {
+  font-size: 14px; padding: 9px 16px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--border); background: #1e232e; color: var(--text);
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.danger:hover { border-color: var(--err); color: var(--err); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+select { min-width: 110px; }
+label.small { font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+.live {
+  min-height: 96px; font-size: 19px; line-height: 1.7;
+  display: flex; align-items: center;
+}
+.live .placeholder { color: var(--dim); }
+.live .text { width: 100%; word-break: break-all; }
+.live .text.partial { color: #a9c2ff; }
+.history { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.history .seg { display: flex; gap: 10px; font-size: 14px; line-height: 1.6; }
+.history .seg .ts { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 1px; }
+.history .seg .txt { word-break: break-all; }
+.history .seg .raw { color: var(--dim); font-size: 12px; margin-top: 2px; word-break: break-all; }
+.history .seg .raw::before { content: "原文: "; }
+.empty { color: var(--dim); text-align: center; padding: 20px 0; font-size: 14px; }
+#toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: #1e232e; border: 1px solid var(--accent); color: var(--text);
+  padding: 10px 18px; border-radius: 10px; font-size: 13px; display: none;
+  max-width: 80vw; word-break: break-all; z-index: 10;
+}
+#vumeter { width: 100%; height: 6px; background: #1e232e; border-radius: 3px; overflow: hidden; }
+#vumeter .bar { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>OminiX 实时语音识别</h1>
+    <div class="badges">
+      <span class="badge off" id="micBadge">● 麦克风未开启</span>
+      <span class="badge off" id="modelBadge">ASR 未加载</span>
+      <span class="badge off" id="polishBadge">润色未加载</span>
+      <span class="badge" id="idleBadge">空闲 -</span>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="controls">
+      <select id="lang">
+        <option value="Chinese" selected>中文</option>
+        <option value="English">English</option>
+        <option value="Japanese">日本語</option>
+        <option value="Korean">한국어</option>
+        <option value="Cantonese">粤语</option>
+        <option value="German">Deutsch</option>
+        <option value="French">Français</option>
+        <option value="Spanish">Español</option>
+        <option value="Russian">Русский</option>
+      </select>
+      <button class="primary" id="btnMic">开始录音</button>
+      <button id="btnSave">保存转写</button>
+      <button id="btnDownload">下载最近保存</button>
+      <button class="danger" id="btnUnload">卸载模型</button>
+      <button class="danger" id="btnClear">清空</button>
+      <label class="small"><input type="checkbox" id="polishToggle" checked> AI润色纠错</label>
+      <label class="small"><input type="checkbox" id="autoSave" checked> 自动保存(每60秒)</label>
+    </div>
+    <div style="height:12px"></div>
+    <div id="vumeter"><div class="bar" id="vubar"></div></div>
+  </div>
+
+  <div class="panel">
+    <details id="domainPanel">
+      <summary style="cursor:pointer;font-size:14px;color:var(--dim)">领域优化（理工类术语/上下文）</summary>
+      <div style="height:12px"></div>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:8px">
+        配置来源: <span id="domainPath" style="color:var(--text)">加载中…</span><br>
+        直接用文本编辑器修改该文件，保存后 5 秒内自动生效（只读预览）：
+      </div>
+      <label style="font-size:13px;color:var(--dim)">[system] 领域提示词</label>
+      <textarea id="systemPrompt" rows="2" readonly style="width:100%;margin-top:6px;background:#1e232e;border:1px solid var(--border);border-radius:10px;color:var(--dim);padding:10px;font-size:13px;resize:vertical"></textarea>
+      <label style="font-size:13px;color:var(--dim);display:block;margin-top:12px">[terms] 术语表</label>
+      <textarea id="termsList" rows="5" readonly style="width:100%;margin-top:6px;background:#1e232e;border:1px solid var(--border);border-radius:10px;color:var(--dim);padding:10px;font-size:13px;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+        <button id="btnReloadDomain">重新加载配置</button>
+        <span id="domainStatus" style="font-size:12px;color:var(--dim)"></span>
+      </div>
+    </details>
+  </div>
+
+  <div class="panel live">
+    <div class="placeholder" id="livePlaceholder">点击"开始录音"，说话后转写结果将实时显示在这里…</div>
+    <div class="text partial" id="liveText" style="display:none"></div>
+  </div>
+
+  <div class="panel">
+    <h3 style="font-size:14px;color:var(--dim);margin-bottom:12px">转写记录 <span id="segCount" style="color:var(--text)"></span></h3>
+    <div class="history" id="history"><div class="empty">暂无记录</div></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let ws = null, audioCtx = null, workletNode = null, micStream = null, scriptNode = null;
+let lang = 'Chinese', wsReady = false, timerAuto = null, timerPoll = null;
+
+function toast(msg, ms = 2600) {
+  const t = $('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms);
+}
+
+function setMic(on) {
+  $('micBadge').textContent = on ? '● 录音中' : '● 麦克风未开启';
+  $('micBadge').className = 'badge ' + (on ? 'on' : 'off');
+  $('btnMic').textContent = on ? '停止录音' : '开始录音';
+  $('btnMic').classList.toggle('primary', !on);
+}
+
+function setModel(loaded, loading) {
+  const b = $('modelBadge');
+  if (loading) { b.textContent = 'ASR 模型加载中…'; b.className = 'badge off'; }
+  else if (loaded) { b.textContent = 'ASR 模型已加载'; b.className = 'badge on'; }
+  else { b.textContent = 'ASR 未加载(空闲已卸载)'; b.className = 'badge off'; }
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { wsReady = true; ws.send(JSON.stringify({type:'lang', lang})); };
+  ws.onmessage = ev => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.type === 'partial' && m.text) {
+      $('livePlaceholder').style.display = 'none';
+      $('liveText').style.display = 'block';
+      $('liveText').textContent = m.text;
+    } else if (m.type === 'final' && m.text) {
+      $('livePlaceholder').style.display = 'block';
+      $('liveText').style.display = 'none';
+      $('liveText').textContent = '';
+      addSegment(m.text, m.polished, m.ts);
+    } else if (m.type === 'polish_status') {
+      const b = $('polishBadge');
+      if (m.loading) { b.textContent = '润色模型加载中…'; b.className = 'badge off'; }
+      else if (m.loaded) { b.textContent = '润色模型已加载'; b.className = 'badge on'; }
+      else { b.textContent = '润色模型未加载'; b.className = 'badge off'; }
+    } else if (m.type === 'polish_toggled') {
+      $('polishToggle').checked = m.enabled;
+      if (!m.available) toast('润色模型不可用（未找到模型文件）');
+    } else if (m.type === 'status') {
+      setModel(!!m.model_loaded, !!m.loading);
+      if (m.model_loaded === false && !m.loading) toast('模型已从内存卸载（空闲超时）');
+    } else if (m.type === 'saved') {
+      toast('已保存: ' + m.path, 5000);
+    } else if (m.type === 'domain') {
+      $('systemPrompt').value = m.system || '';
+      $('termsList').value = (m.terms || []).join('\n');
+      $('domainPath').textContent = m.path || '';
+    } else if (m.type === 'context_applied') {
+      $('domainStatus').textContent = `已应用: 提示词${m.system ? '✓' : '✗'} / ${m.terms} 个术语`;
+    } else if (m.type === 'error') {
+      toast('错误: ' + m.text, 4000);
+    }
+  };
+  ws.onclose = () => { wsReady = false; setMic(false); setTimeout(connectWS, 2000); };
+}
+
+function addSegment(text, polished, ts) {
+  const h = $('history');
+  const empty = h.querySelector('.empty');
+  if (empty) empty.remove();
+  const d = document.createElement('div');
+  d.className = 'seg';
+  const t = document.createElement('div'); t.className = 'ts'; t.textContent = ts;
+  const body = document.createElement('div');
+  const x = document.createElement('div'); x.className = 'txt';
+  x.textContent = polished && polished.trim() ? polished : text;
+  body.appendChild(x);
+  if (polished && polished.trim() && polished !== text) {
+    const raw = document.createElement('div'); raw.className = 'raw';
+    raw.textContent = text;
+    body.appendChild(raw);
+  }
+  d.appendChild(t); d.appendChild(body);
+  h.appendChild(d);
+  h.scrollTop = h.scrollHeight;
+  updateCount();
+}
+
+function updateCount() {
+  const n = $('history').querySelectorAll('.seg').length;
+  $('segCount').textContent = n ? `(${n} 段)` : '';
+}
+
+async function startMic() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  } catch (e) {
+    toast('无法访问麦克风: ' + e.message + '（请通过 http://localhost 访问并授权）', 5000);
+    return;
+  }
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 }); }
+  catch (e) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+  const src = audioCtx.createMediaStreamSource(micStream);
+
+  const workletCode = `
+    class PcmProcessor extends AudioWorkletProcessor {
+      constructor() { super(); this.ratio = sampleRate / 16000; this.pos = 0; }
+      process(inputs) {
+        const ch = inputs[0][0];
+        if (!ch) return true;
+        if (this.ratio === 1) { this.port.postMessage(new Float32Array(ch)); return true; }
+        const out = [];
+        while (this.pos < ch.length) {
+          const i0 = Math.floor(this.pos), i1 = Math.min(i0 + 1, ch.length - 1);
+          const f = this.pos - i0;
+          out.push(ch[i0] * (1 - f) + ch[i1] * f);
+          this.pos += this.ratio;
+        }
+        this.pos -= ch.length;
+        if (out.length) this.port.postMessage(new Float32Array(out));
+        return true;
+      }
+    }
+    registerProcessor('pcm-processor', PcmProcessor);
+  `;
+
+  const sendPcm = data => {
+    if (ws && wsReady && ws.readyState === 1) ws.send(data);
+    let rms = 0;
+    for (let i = 0; i < data.length; i += 64) rms += data[i] * data[i];
+    rms = Math.sqrt(rms / Math.max(1, data.length / 64));
+    $('vubar').style.width = Math.min(100, rms * 900) + '%';
+  };
+
+  if (audioCtx.audioWorklet) {
+    try {
+      await audioCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' })));
+      workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
+      workletNode.port.onmessage = e => sendPcm(e.data);
+      src.connect(workletNode);
+      workletNode.connect(audioCtx.destination);
+    } catch (e) {
+      toast('AudioWorklet 不可用，降级到 ScriptProcessor');
+      workletNode = null;
+    }
+  }
+  if (!workletNode && audioCtx.createScriptProcessor) {
+    scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    const ratio = audioCtx.sampleRate / 16000;
+    let pos = 0;
+    scriptNode.onaudioprocess = e => {
+      const ch = e.inputBuffer.getChannelData(0);
+      if (ratio === 1) { sendPcm(new Float32Array(ch)); return; }
+      const out = [];
+      while (pos < ch.length) {
+        const i0 = Math.floor(pos), i1 = Math.min(i0 + 1, ch.length - 1);
+        const f = pos - i0;
+        out.push(ch[i0] * (1 - f) + ch[i1] * f);
+        pos += ratio;
+      }
+      pos -= ch.length;
+      sendPcm(new Float32Array(out));
+    };
+    src.connect(scriptNode);
+    scriptNode.connect(audioCtx.destination);
+  }
+  await audioCtx.resume();
+  setMic(true);
+}
+
+function stopMic() {
+  if (workletNode) { try { workletNode.disconnect(); } catch {} workletNode = null; }
+  if (scriptNode) { try { scriptNode.disconnect(); } catch {} scriptNode = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  $('vubar').style.width = '0%';
+  setMic(false);
+}
+
+$('btnMic').onclick = () => {
+  if (micStream) stopMic(); else startMic();
+};
+$('lang').onchange = () => {
+  lang = $('lang').value;
+  if (ws && wsReady) ws.send(JSON.stringify({type:'lang', lang}));
+};
+$('btnSave').onclick = async () => {
+  const r = await fetch('/api/save', { method: 'POST' });
+  const j = await r.json();
+  toast(j.ok ? '已保存: ' + j.path : '保存失败: ' + (j.error || '') , 4000);
+};
+$('btnDownload').onclick = () => { window.open('/api/download', '_blank'); };
+$('btnUnload').onclick = async () => {
+  await fetch('/api/unload', { method: 'POST' });
+  toast('已发送卸载指令');
+};
+$('btnClear').onclick = async () => {
+  await fetch('/api/clear', { method: 'POST' });
+  $('history').innerHTML = '<div class="empty">暂无记录</div>';
+  updateCount();
+};
+$('autoSave').onchange = () => {
+  clearInterval(timerAuto);
+  if ($('autoSave').checked) timerAuto = setInterval(() => fetch('/api/save', { method: 'POST' }), 60000);
+};
+
+$('btnReloadDomain').onclick = () => {
+  if (ws && wsReady) {
+    ws.send(JSON.stringify({type:'reload_domain'}));
+    toast('已请求重新加载配置');
+  } else {
+    toast('WebSocket 未连接');
+  }
+};
+
+$('polishToggle').onchange = () => {
+   if (ws && wsReady) ws.send(JSON.stringify({type:'polish', enabled: $('polishToggle').checked}));
+};
+
+async function pollStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const j = await r.json();
+    setModel(j.model_loaded, false);
+    const pb = $('polishBadge');
+    if (j.polish_available) {
+      pb.textContent = j.polish_loaded ? '润色模型已加载' : '润色模型未加载';
+      pb.className = 'badge ' + (j.polish_loaded ? 'on' : 'off');
+    } else {
+      pb.textContent = '润色模型不可用';
+      pb.className = 'badge err';
+      $('polishToggle').checked = false;
+    }
+    const t = j.idle_timeout_secs;
+    $('idleBadge').textContent = t ? `空闲 ${Math.floor(j.idle_secs / 60)}m${j.idle_secs % 60}s / ${Math.floor(t / 60)}min 卸载` : '空闲卸载已关闭';
+  } catch {}
+}
+
+connectWS();
+pollStatus();
+timerPoll = setInterval(pollStatus, 5000);
+if ($('autoSave').checked) timerAuto = setInterval(() => fetch('/api/save', { method: 'POST' }), 60000);
+</script>
+</body>
+</html>

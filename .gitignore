@@ -1,0 +1,4 @@
+/target
+/transcripts
+*.log
+.DS_Store

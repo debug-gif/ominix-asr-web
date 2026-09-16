@@ -1,0 +1,12 @@
+[package]
+name = "mlx-tests"
+edition = "2021"
+version.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+mlx-internal-macros.workspace = true
+mlx-rs.workspace = true
+tempfile.workspace = true
