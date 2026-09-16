@@ -75,6 +75,7 @@ impl Settings {
 struct Segment {
     text: String,
     polished: Option<String>,
+    translated: Option<String>,
     ts: String,
 }
 
@@ -223,11 +224,14 @@ fn save_transcript(state: &Arc<AppState>) -> Result<String, String> {
     content.push_str(&format!("# 保存时间: {}\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
     content.push_str(&format!("# 共 {} 段\n\n", segments.len()));
     for s in segments.iter() {
-        match &s.polished {
-            Some(p) => {
+        match (&s.polished, &s.translated) {
+            (Some(p), _) => {
                 content.push_str(&format!("[{}] {}\n      润色: {}\n", s.ts, s.text, p));
             }
-            None => {
+            (_, Some(t)) => {
+                content.push_str(&format!("[{}] {}\n      翻译: {}\n", s.ts, s.text, t));
+            }
+            (None, None) => {
                 content.push_str(&format!("[{}] {}\n", s.ts, s.text));
             }
         }
@@ -347,6 +351,10 @@ struct WsCmd {
     lang: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -358,7 +366,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let mut lang = state.settings.language.clone();
     let mut system_prompt = String::new();
     let mut terms: Vec<String> = Vec::new();
-    let mut polish_enabled = state.polish_available;
+    let mut enhance_mode = String::from("polish");
+    let mut target_lang = String::from("English");
     let mut event_rx = state.events.subscribe();
 
     // 连接时推送当前领域配置
@@ -404,35 +413,69 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     match result {
                                         Some(Ok(text)) if !text.trim().is_empty() => {
                                             let mut polished: Option<String> = None;
-                                            if polish_enabled {
-                                                let precv =
-                                                    state.polish.polish(text.clone(), lang.clone());
-                                                match tokio::task::block_in_place(|| precv.recv().ok())
-                                                {
-                                                    Some(Ok(p)) if !p.trim().is_empty() => {
-                                                        polished = Some(p);
-                                                    }
-                                                    _ => {
-                                                        let msg = serde_json::json!({
-                                                            "type":"error",
-                                                            "text":"润色失败，已保留原文"
-                                                        });
-                                                        let _ = socket
-                                                            .send(Message::Text(msg.to_string().into()))
-                                                            .await;
+                                            let mut translated: Option<String> = None;
+                                            match enhance_mode.as_str() {
+                                                "polish" => {
+                                                    let precv = state
+                                                        .polish
+                                                        .polish(text.clone(), lang.clone());
+                                                    match tokio::task::block_in_place(|| {
+                                                        precv.recv().ok()
+                                                    }) {
+                                                        Some(Ok(p)) if !p.trim().is_empty() => {
+                                                            polished = Some(p);
+                                                        }
+                                                        _ => {
+                                                            let msg = serde_json::json!({
+                                                                "type":"error",
+                                                                "text":"润色失败，已保留原文"
+                                                            });
+                                                            let _ = socket
+                                                                .send(Message::Text(
+                                                                    msg.to_string().into(),
+                                                                ))
+                                                                .await;
+                                                        }
                                                     }
                                                 }
+                                                "translate" => {
+                                                    let precv = state.polish.translate(
+                                                        text.clone(),
+                                                        target_lang.clone(),
+                                                    );
+                                                    match tokio::task::block_in_place(|| {
+                                                        precv.recv().ok()
+                                                    }) {
+                                                        Some(Ok(t)) if !t.trim().is_empty() => {
+                                                            translated = Some(t);
+                                                        }
+                                                        _ => {
+                                                            let msg = serde_json::json!({
+                                                                "type":"error",
+                                                                "text":"翻译失败，已保留原文"
+                                                            });
+                                                            let _ = socket
+                                                                .send(Message::Text(
+                                                                    msg.to_string().into(),
+                                                                ))
+                                                                .await;
+                                                        }
+                                                    }
+                                                }
+                                                _ => {}
                                             }
                                             let ts = Local::now().format("%H:%M:%S").to_string();
                                             let seg = Segment {
                                                 text: text.clone(),
                                                 polished: polished.clone(),
+                                                translated: translated.clone(),
                                                 ts: ts.clone(),
                                             };
                                             let msg = serde_json::json!({
                                                 "type":"final",
                                                 "text":text,
                                                 "polished":polished,
+                                                "translated":translated,
                                                 "ts":ts,
                                                 "dur":dur,
                                             });
@@ -515,10 +558,33 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     state.polish.unload();
                                 }
                                 "polish" => {
-                                    polish_enabled = cmd.enabled.unwrap_or(true) && state.polish_available;
+                                    enhance_mode = if cmd.enabled.unwrap_or(true) {
+                                        "polish".to_string()
+                                    } else {
+                                        "off".to_string()
+                                    };
                                     let msg = serde_json::json!({
-                                        "type": "polish_toggled",
-                                        "enabled": polish_enabled,
+                                        "type": "enhance_applied",
+                                        "mode": enhance_mode,
+                                        "target": target_lang,
+                                        "available": state.polish_available,
+                                    });
+                                    let _ = socket.send(Message::Text(msg.to_string().into())).await;
+                                }
+                                "enhance" => {
+                                    let mode = cmd.mode.unwrap_or_else(|| "polish".to_string());
+                                    enhance_mode = match mode.as_str() {
+                                        "translate" => "translate".to_string(),
+                                        "polish" => "polish".to_string(),
+                                        _ => "off".to_string(),
+                                    };
+                                    if let Some(t) = cmd.target {
+                                        target_lang = t;
+                                    }
+                                    let msg = serde_json::json!({
+                                        "type": "enhance_applied",
+                                        "mode": enhance_mode,
+                                        "target": target_lang,
                                         "available": state.polish_available,
                                     });
                                     let _ = socket.send(Message::Text(msg.to_string().into())).await;

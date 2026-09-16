@@ -70,7 +70,7 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
     <div class="badges">
       <span class="badge off" id="micBadge">● 麦克风未开启</span>
       <span class="badge off" id="modelBadge">ASR 未加载</span>
-      <span class="badge off" id="polishBadge">润色未加载</span>
+      <span class="badge off" id="polishBadge">增强未加载</span>
       <span class="badge" id="idleBadge">空闲 -</span>
     </div>
   </header>
@@ -100,7 +100,21 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
       <button id="btnDownload">下载最近保存</button>
       <button class="danger" id="btnUnload">卸载模型</button>
       <button class="danger" id="btnClear">清空</button>
-      <label class="small"><input type="checkbox" id="polishToggle" checked> AI润色纠错</label>
+      <select id="enhanceMode" title="转写后处理">
+        <option value="polish" selected>AI润色</option>
+        <option value="translate">实时翻译</option>
+        <option value="off">关闭增强</option>
+      </select>
+      <select id="targetLang" title="翻译目标语言" style="display:none">
+        <option value="English" selected>English</option>
+        <option value="中文">中文</option>
+        <option value="日本語">日本語</option>
+        <option value="한국어">한국어</option>
+        <option value="Deutsch">Deutsch</option>
+        <option value="Français">Français</option>
+        <option value="Español">Español</option>
+        <option value="Русский">Русский</option>
+      </select>
       <label class="small"><input type="checkbox" id="autoSave" checked> 自动保存(每60秒)</label>
     </div>
     <div style="height:12px"></div>
@@ -184,15 +198,17 @@ function connectWS() {
       $('livePlaceholder').style.display = 'block';
       $('liveText').style.display = 'none';
       $('liveText').textContent = '';
-      addSegment(m.text, m.polished, m.ts);
+      addSegment(m.text, m.polished || m.translated, m.ts, m.translated ? '译文' : '润色');
     } else if (m.type === 'polish_status') {
       const b = $('polishBadge');
-      if (m.loading) { b.textContent = '润色模型加载中…'; b.className = 'badge off'; }
-      else if (m.loaded) { b.textContent = '润色模型已加载'; b.className = 'badge on'; }
-      else { b.textContent = '润色模型未加载'; b.className = 'badge off'; }
-    } else if (m.type === 'polish_toggled') {
-      $('polishToggle').checked = m.enabled;
-      if (!m.available) toast('润色模型不可用（未找到模型文件）');
+      if (m.loading) { b.textContent = '增强模型加载中…'; b.className = 'badge off'; }
+      else if (m.loaded) { b.textContent = '增强模型已加载'; b.className = 'badge on'; }
+      else { b.textContent = '增强模型未加载'; b.className = 'badge off'; }
+    } else if (m.type === 'enhance_applied') {
+      if (!m.available) toast('增强模型不可用（未找到模型文件）');
+      $('enhanceMode').value = m.mode;
+      $('targetLang').style.display = m.mode === 'translate' ? '' : 'none';
+      $('targetLang').value = m.target || 'English';
     } else if (m.type === 'status') {
       setModel(!!m.model_loaded, !!m.loading);
       if (m.model_loaded === false && !m.loading) toast('模型已从内存卸载（空闲超时）');
@@ -211,7 +227,7 @@ function connectWS() {
   ws.onclose = () => { wsReady = false; setMic(false); setTimeout(connectWS, 2000); };
 }
 
-function addSegment(text, polished, ts) {
+function addSegment(text, enhanced, ts, label) {
   const h = $('history');
   const empty = h.querySelector('.empty');
   if (empty) empty.remove();
@@ -220,11 +236,12 @@ function addSegment(text, polished, ts) {
   const t = document.createElement('div'); t.className = 'ts'; t.textContent = ts;
   const body = document.createElement('div');
   const x = document.createElement('div'); x.className = 'txt';
-  x.textContent = polished && polished.trim() ? polished : text;
+  x.textContent = enhanced && enhanced.trim() ? enhanced : text;
   body.appendChild(x);
-  if (polished && polished.trim() && polished !== text) {
+  if (enhanced && enhanced.trim() && enhanced !== text) {
     const raw = document.createElement('div'); raw.className = 'raw';
     raw.textContent = text;
+    raw.style.color = 'var(--dim)';
     body.appendChild(raw);
   }
   d.appendChild(t); d.appendChild(body);
@@ -417,8 +434,17 @@ $('btnReloadDomain').onclick = () => {
   }
 };
 
-$('polishToggle').onchange = () => {
-   if (ws && wsReady) ws.send(JSON.stringify({type:'polish', enabled: $('polishToggle').checked}));
+$('enhanceMode').onchange = () => {
+  const mode = $('enhanceMode').value;
+  $('targetLang').style.display = mode === 'translate' ? '' : 'none';
+  if (ws && wsReady) {
+    ws.send(JSON.stringify({type:'enhance', mode, target: $('targetLang').value}));
+  }
+};
+$('targetLang').onchange = () => {
+  if (ws && wsReady) {
+    ws.send(JSON.stringify({type:'enhance', mode: $('enhanceMode').value, target: $('targetLang').value}));
+  }
 };
 
 async function pollStatus() {
@@ -428,12 +454,13 @@ async function pollStatus() {
     setModel(j.model_loaded, false);
     const pb = $('polishBadge');
     if (j.polish_available) {
-      pb.textContent = j.polish_loaded ? '润色模型已加载' : '润色模型未加载';
+      pb.textContent = j.polish_loaded ? '增强模型已加载' : '增强模型未加载';
       pb.className = 'badge ' + (j.polish_loaded ? 'on' : 'off');
     } else {
-      pb.textContent = '润色模型不可用';
+      pb.textContent = '增强模型不可用';
       pb.className = 'badge err';
-      $('polishToggle').checked = false;
+      $('enhanceMode').value = 'off';
+      $('targetLang').style.display = 'none';
     }
     const t = j.idle_timeout_secs;
     $('idleBadge').textContent = t ? `空闲 ${Math.floor(j.idle_secs / 60)}m${j.idle_secs % 60}s / ${Math.floor(t / 60)}min 卸载` : '空闲卸载已关闭';

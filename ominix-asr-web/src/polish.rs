@@ -22,6 +22,11 @@ pub enum PolishCmd {
         language: String,
         reply: Sender<Result<String, String>>,
     },
+    Translate {
+        text: String,
+        target: String,
+        reply: Sender<Result<String, String>>,
+    },
     Unload,
 }
 
@@ -73,6 +78,20 @@ impl PolishWorker {
         let _ = self.tx.send(PolishCmd::Polish {
             text,
             language,
+            reply,
+        });
+        recv
+    }
+
+    pub fn translate(
+        &self,
+        text: String,
+        target: String,
+    ) -> Receiver<Result<String, String>> {
+        let (reply, recv) = channel();
+        let _ = self.tx.send(PolishCmd::Translate {
+            text,
+            target,
             reply,
         });
         recv
@@ -136,6 +155,50 @@ fn worker_loop(
                 }
                 let _ = reply.send(result);
             }
+            PolishCmd::Translate {
+                text,
+                target,
+                reply,
+            } => {
+                if state.is_none() {
+                    eprintln!("[polish] model not loaded, loading from {}...", model_dir.display());
+                    let _ = events.send(
+                        serde_json::json!({"type":"polish_status","loaded":false,"loading":true})
+                            .to_string(),
+                    );
+                    match load(&model_dir) {
+                        Ok(m) => {
+                            state = Some(m);
+                            model_loaded.store(true, Ordering::SeqCst);
+                            eprintln!("[polish] model loaded");
+                            let _ = events.send(
+                                serde_json::json!({"type":"polish_status","loaded":true,"loading":false})
+                                    .to_string(),
+                            );
+                        }
+                        Err(e) => {
+                            let _ = events.send(
+                                serde_json::json!({"type":"polish_status","loaded":false,"loading":false})
+                                    .to_string(),
+                            );
+                            let _ = reply.send(Err(format!("增强模型加载失败: {e}")));
+                            continue;
+                        }
+                    }
+                }
+                let t0 = std::time::Instant::now();
+                let result = translate(&mut state.as_mut().unwrap(), &text, &target);
+                match &result {
+                    Ok(out) => eprintln!(
+                        "[translate] {} chars -> {} ({}ms)",
+                        text.chars().count(),
+                        target,
+                        t0.elapsed().as_millis()
+                    ),
+                    Err(e) => eprintln!("[translate] error: {e}"),
+                }
+                let _ = reply.send(result);
+            }
             PolishCmd::Unload => {
                 if state.take().is_some() {
                     model_loaded.store(false, Ordering::SeqCst);
@@ -180,10 +243,27 @@ fn polish(state: &mut PolishModel, text: &str, language: &str) -> Result<String,
     };
     let system = if use_zh { ZH_SYSTEM } else { EN_SYSTEM };
     let user_msg = format!("{system}\n\n以下是需要整理的语音转写草稿：\n{text}");
+    run_llm(state, &user_msg)
+}
 
+fn translate(state: &mut PolishModel, text: &str, target: &str) -> Result<String, String> {
+    let is_cjk_target = target.contains('中')
+        || target == "Chinese"
+        || target == "日本語"
+        || target == "한국어";
+    let system = if is_cjk_target {
+        format!("你是一位专业翻译。把用户提供的文本翻译成{target}，保持原意，保留专业术语与数字，直接输出译文，不要任何解释。")
+    } else {
+        format!("You are a professional translator. Translate the user's text into {target}. Keep the original meaning, preserve technical terms and numbers, and output only the translation.")
+    };
+    let user_msg = format!("{system}\n\n{text}");
+    run_llm(state, &user_msg)
+}
+
+fn run_llm(state: &mut PolishModel, user_msg: &str) -> Result<String, String> {
     let conversations = vec![Conversation {
         role: Role::User,
-        content: user_msg.as_str(),
+        content: user_msg,
     }];
 
     let args = ApplyChatTemplateArgs {
@@ -235,7 +315,7 @@ fn polish(state: &mut PolishModel, text: &str, language: &str) -> Result<String,
     }
     let out = out.trim().to_string();
     if out.is_empty() {
-        Ok(text.to_string())
+        Err("生成结果为空".to_string())
     } else {
         Ok(out)
     }
