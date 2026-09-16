@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use mlx_lm_utils::tokenizer::{
@@ -54,13 +54,17 @@ Keep the original meaning, preserve technical terms and numbers, and do not add 
 Output only the polished text, with no explanation.";
 
 impl PolishWorker {
-    pub fn start(model_dir: PathBuf, events: tokio::sync::broadcast::Sender<String>) -> Self {
+    pub fn start(
+        model_dir: PathBuf,
+        events: tokio::sync::broadcast::Sender<String>,
+        mlx_lock: Arc<Mutex<()>>,
+    ) -> Self {
         let (tx, rx) = channel::<PolishCmd>();
         let model_loaded = Arc::new(AtomicBool::new(false));
         let flag = model_loaded.clone();
         let handle = std::thread::Builder::new()
             .name("polish-worker".into())
-            .spawn(move || worker_loop(rx, model_dir, flag, events))
+            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock))
             .expect("failed to spawn polish worker");
         PolishWorker {
             tx,
@@ -107,6 +111,7 @@ fn worker_loop(
     model_dir: PathBuf,
     model_loaded: Arc<AtomicBool>,
     events: tokio::sync::broadcast::Sender<String>,
+    mlx_lock: Arc<Mutex<()>>,
 ) {
     let mut state: Option<PolishModel> = None;
     while let Ok(cmd) = rx.recv() {
@@ -116,6 +121,8 @@ fn worker_loop(
                 language,
                 reply,
             } => {
+                // MLX 非线程安全: 与 ASR 线程串行化
+                let _mlx_guard = mlx_lock.lock().unwrap();
                 if state.is_none() {
                     eprintln!("[polish] model not loaded, loading from {}...", model_dir.display());
                     let _ = events.send(
@@ -160,6 +167,8 @@ fn worker_loop(
                 target,
                 reply,
             } => {
+                // MLX 非线程安全: 与 ASR 线程串行化
+                let _mlx_guard = mlx_lock.lock().unwrap();
                 if state.is_none() {
                     eprintln!("[polish] model not loaded, loading from {}...", model_dir.display());
                     let _ = events.send(
@@ -200,6 +209,7 @@ fn worker_loop(
                 let _ = reply.send(result);
             }
             PolishCmd::Unload => {
+                let _mlx_guard = mlx_lock.lock().unwrap();
                 if state.take().is_some() {
                     model_loaded.store(false, Ordering::SeqCst);
                     eprintln!("[polish] model unloaded (idle timeout / manual)");
@@ -278,22 +288,39 @@ fn run_llm(state: &mut PolishModel, user_msg: &str) -> Result<String, String> {
         .tokenizer
         .apply_chat_template_and_encode(state.chat_template.clone(), args)
         .map_err(|e| format!("prompt 编码失败: {e:?}"))?;
-    let prompt: Vec<u32> = encodings
+    let mut prompt: Vec<u32> = encodings
         .iter()
         .flat_map(|encoding| encoding.get_ids())
         .copied()
         .collect();
+
+    // 关闭 Qwen3 思考模式: 与 chat template 中 enable_thinking=false 等价,
+    // 在生成提示前注入空的 <think></think> 块, 避免长思考链拖慢/卡死翻译
+    let no_think_suffix = "\n<think>\n\n</think>\n\n";
+    if let Ok(suffix_enc) = state.tokenizer.encode(no_think_suffix, false) {
+        prompt.extend(suffix_enc.get_ids().iter().copied());
+    }
+
     let prompt_tokens = Array::from(&prompt[..]).index(NewAxis);
 
     let mut cache: Vec<Option<KVCache>> = Vec::new();
     let generator = Generate::<KVCache>::new(&mut state.model, &mut cache, 0.3, &prompt_tokens);
 
-    let max_tokens = 1024;
+    let max_tokens = 512;
     let mut tokens: Vec<Array> = Vec::new();
+    let mut last_ids: Vec<u32> = Vec::with_capacity(10);
     for token in generator {
         let t = token.map_err(|e| format!("生成失败: {e}"))?;
         let token_id = t.item::<u32>();
         if token_id == 151643 || token_id == 151645 {
+            break;
+        }
+        // 重复退化保护: 连续 10 个相同 token 即停止
+        last_ids.push(token_id);
+        if last_ids.len() > 10 {
+            last_ids.remove(0);
+        }
+        if last_ids.len() == 10 && last_ids.iter().all(|&x| x == token_id) {
             break;
         }
         tokens.push(t);

@@ -29,6 +29,8 @@ h1 { font-size: 20px; font-weight: 600; }
 .badge.err { color: var(--err); border-color: var(--err); }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
 .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.lbl { font-size: 12px; color: var(--dim); margin-right: -6px; }
+.history .seg .meta { font-size: 11px; color: var(--accent); margin-bottom: 2px; min-height: 14px; }
 button, select {
   font-size: 14px; padding: 9px 16px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--border); background: #1e232e; color: var(--text);
@@ -77,8 +79,9 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
 
   <div class="panel">
     <div class="controls">
-      <select id="lang">
-        <option value="Auto" selected>语言自动识别</option>
+      <span class="lbl">识别语言</span>
+      <select id="lang" title="识别语言">
+        <option value="Auto" selected>自动识别</option>
         <option value="Chinese">中文</option>
         <option value="English">English</option>
         <option value="Japanese">日本語</option>
@@ -105,6 +108,7 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
         <option value="translate">实时翻译</option>
         <option value="off">关闭增强</option>
       </select>
+      <span class="lbl" id="targetLbl" style="display:none">目标语言</span>
       <select id="targetLang" title="翻译目标语言" style="display:none">
         <option value="English" selected>English</option>
         <option value="中文">中文</option>
@@ -198,7 +202,27 @@ function connectWS() {
       $('livePlaceholder').style.display = 'block';
       $('liveText').style.display = 'none';
       $('liveText').textContent = '';
-      addSegment(m.text, m.polished || m.translated, m.ts, m.translated ? '译文' : '润色');
+      addSegment(m.text, null, m.ts, null, m.id);
+    } else if (m.type === 'enhanced' && m.id !== undefined) {
+      const seg = document.querySelector(`.seg[data-id="${m.id}"]`);
+      if (seg) {
+        const body = seg.querySelector('.body');
+        const txt = body.querySelector('.txt');
+        const meta = body.querySelector('.meta');
+        if (m.translated) {
+          txt.textContent = m.translated;
+          meta.textContent = `译自: ${m.src_lang || '自动识别'}`;
+        } else if (m.polished) {
+          txt.textContent = m.polished;
+          meta.textContent = '已润色';
+        }
+        if (!body.querySelector('.raw')) {
+          const raw = document.createElement('div');
+          raw.className = 'raw';
+          raw.textContent = txt.dataset.orig || '';
+          body.appendChild(raw);
+        }
+      }
     } else if (m.type === 'polish_status') {
       const b = $('polishBadge');
       if (m.loading) { b.textContent = '增强模型加载中…'; b.className = 'badge off'; }
@@ -208,6 +232,7 @@ function connectWS() {
       if (!m.available) toast('增强模型不可用（未找到模型文件）');
       $('enhanceMode').value = m.mode;
       $('targetLang').style.display = m.mode === 'translate' ? '' : 'none';
+      $('targetLbl').style.display = m.mode === 'translate' ? '' : 'none';
       $('targetLang').value = m.target || 'English';
     } else if (m.type === 'status') {
       setModel(!!m.model_loaded, !!m.loading);
@@ -227,21 +252,24 @@ function connectWS() {
   ws.onclose = () => { wsReady = false; setMic(false); setTimeout(connectWS, 2000); };
 }
 
-function addSegment(text, enhanced, ts, label) {
+function addSegment(text, enhanced, ts, label, id) {
   const h = $('history');
   const empty = h.querySelector('.empty');
   if (empty) empty.remove();
   const d = document.createElement('div');
   d.className = 'seg';
+  if (id !== undefined && id !== null) d.dataset.id = id;
   const t = document.createElement('div'); t.className = 'ts'; t.textContent = ts;
-  const body = document.createElement('div');
+  const body = document.createElement('div'); body.className = 'body';
+  const meta = document.createElement('div'); meta.className = 'meta';
   const x = document.createElement('div'); x.className = 'txt';
   x.textContent = enhanced && enhanced.trim() ? enhanced : text;
+  x.dataset.orig = text;
+  body.appendChild(meta);
   body.appendChild(x);
   if (enhanced && enhanced.trim() && enhanced !== text) {
     const raw = document.createElement('div'); raw.className = 'raw';
     raw.textContent = text;
-    raw.style.color = 'var(--dim)';
     body.appendChild(raw);
   }
   d.appendChild(t); d.appendChild(body);
@@ -437,6 +465,7 @@ $('btnReloadDomain').onclick = () => {
 $('enhanceMode').onchange = () => {
   const mode = $('enhanceMode').value;
   $('targetLang').style.display = mode === 'translate' ? '' : 'none';
+  $('targetLbl').style.display = mode === 'translate' ? '' : 'none';
   if (ws && wsReady) {
     ws.send(JSON.stringify({type:'enhance', mode, target: $('targetLang').value}));
   }
@@ -461,6 +490,7 @@ async function pollStatus() {
       pb.className = 'badge err';
       $('enhanceMode').value = 'off';
       $('targetLang').style.display = 'none';
+      $('targetLbl').style.display = 'none';
     }
     const t = j.idle_timeout_secs;
     $('idleBadge').textContent = t ? `空闲 ${Math.floor(j.idle_secs / 60)}m${j.idle_secs % 60}s / ${Math.floor(t / 60)}min 卸载` : '空闲卸载已关闭';

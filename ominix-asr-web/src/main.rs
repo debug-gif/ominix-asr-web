@@ -3,7 +3,7 @@ mod polish;
 mod worker;
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -73,6 +73,7 @@ impl Settings {
 
 #[derive(Clone, Serialize)]
 struct Segment {
+    id: u64,
     text: String,
     polished: Option<String>,
     translated: Option<String>,
@@ -93,6 +94,7 @@ struct AppState {
     settings: Settings,
     domain: Mutex<DomainState>,
     segments: Mutex<Vec<Segment>>,
+    seg_id: AtomicU64,
     last_activity: Arc<Mutex<Instant>>,
     last_saved: Mutex<Option<String>>,
     events: broadcast::Sender<String>,
@@ -203,6 +205,36 @@ impl Vad {
 }
 
 // ── Transcript persistence ──────────────────────────────────────
+
+/// 根据书写系统粗判语言 (用于 UI 显示"识别语言")
+fn detect_lang(text: &str) -> &'static str {
+    let mut cjk = 0usize;
+    let mut kana = 0usize;
+    let mut hangul = 0usize;
+    let mut cyr = 0usize;
+    for c in text.chars() {
+        if ('\u{4e00}'..='\u{9fff}').contains(&c) {
+            cjk += 1;
+        } else if ('\u{3040}'..='\u{30ff}').contains(&c) {
+            kana += 1;
+        } else if ('\u{ac00}'..='\u{d7af}').contains(&c) {
+            hangul += 1;
+        } else if ('\u{0400}'..='\u{04ff}').contains(&c) {
+            cyr += 1;
+        }
+    }
+    if cjk > 0 {
+        "中文"
+    } else if kana > 0 {
+        "日本語"
+    } else if hangul > 0 {
+        "한국어"
+    } else if cyr > 0 {
+        "Русский"
+    } else {
+        "English"
+    }
+}
 
 fn save_transcript(state: &Arc<AppState>) -> Result<String, String> {
     let segments = state
@@ -412,76 +444,77 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     let result = tokio::task::block_in_place(|| recv.recv().ok());
                                     match result {
                                         Some(Ok(text)) if !text.trim().is_empty() => {
-                                            let mut polished: Option<String> = None;
-                                            let mut translated: Option<String> = None;
-                                            match enhance_mode.as_str() {
-                                                "polish" => {
-                                                    let precv = state
-                                                        .polish
-                                                        .polish(text.clone(), lang.clone());
-                                                    match tokio::task::block_in_place(|| {
-                                                        precv.recv().ok()
-                                                    }) {
-                                                        Some(Ok(p)) if !p.trim().is_empty() => {
-                                                            polished = Some(p);
-                                                        }
-                                                        _ => {
-                                                            let msg = serde_json::json!({
-                                                                "type":"error",
-                                                                "text":"润色失败，已保留原文"
-                                                            });
-                                                            let _ = socket
-                                                                .send(Message::Text(
-                                                                    msg.to_string().into(),
-                                                                ))
-                                                                .await;
-                                                        }
-                                                    }
-                                                }
-                                                "translate" => {
-                                                    let precv = state.polish.translate(
-                                                        text.clone(),
-                                                        target_lang.clone(),
-                                                    );
-                                                    match tokio::task::block_in_place(|| {
-                                                        precv.recv().ok()
-                                                    }) {
-                                                        Some(Ok(t)) if !t.trim().is_empty() => {
-                                                            translated = Some(t);
-                                                        }
-                                                        _ => {
-                                                            let msg = serde_json::json!({
-                                                                "type":"error",
-                                                                "text":"翻译失败，已保留原文"
-                                                            });
-                                                            let _ = socket
-                                                                .send(Message::Text(
-                                                                    msg.to_string().into(),
-                                                                ))
-                                                                .await;
-                                                        }
-                                                    }
-                                                }
-                                                _ => {}
-                                            }
                                             let ts = Local::now().format("%H:%M:%S").to_string();
+                                            let id = state.seg_id.fetch_add(1, Ordering::SeqCst);
+                                            let src_lang = detect_lang(&text).to_string();
                                             let seg = Segment {
+                                                id,
                                                 text: text.clone(),
-                                                polished: polished.clone(),
-                                                translated: translated.clone(),
+                                                polished: None,
+                                                translated: None,
                                                 ts: ts.clone(),
                                             };
+                                            // 先立即推送原文, 不阻塞音频管线
                                             let msg = serde_json::json!({
                                                 "type":"final",
-                                                "text":text,
-                                                "polished":polished,
-                                                "translated":translated,
+                                                "id":id,
+                                                "text":text.clone(),
+                                                "src_lang":src_lang,
                                                 "ts":ts,
                                                 "dur":dur,
                                             });
                                             let _ = socket.send(Message::Text(msg.to_string().into())).await;
                                             if let Ok(mut segs) = state.segments.lock() {
                                                 segs.push(seg);
+                                            }
+                                            // 增强(润色/翻译)在后台异步执行, 完成后广播更新
+                                            if enhance_mode == "polish" || enhance_mode == "translate" {
+                                                let st = state.clone();
+                                                let mode = enhance_mode.clone();
+                                                let tgt = target_lang.clone();
+                                                let src_lang_clone = src_lang.clone();
+                                                tokio::spawn(async move {
+                                                    let st2 = st.clone();
+                                                    let mode2 = mode.clone();
+                                                    let result = tokio::task::spawn_blocking(move || {
+                                                        let rx = if mode2 == "translate" {
+                                                            st2.polish.translate(text.clone(), tgt)
+                                                        } else {
+                                                            st2.polish.polish(text.clone(), "Auto".to_string())
+                                                        };
+                                                        rx.recv().ok().and_then(|r| r.ok())
+                                                    })
+                                                    .await
+                                                    .unwrap_or(None);
+                                                    match result {
+                                                        Some(out) if !out.trim().is_empty() => {
+                                                            if let Ok(mut segs) = st.segments.lock() {
+                                                                for s in segs.iter_mut() {
+                                                                    if s.id == id {
+                                                                        if mode == "translate" {
+                                                                            s.translated = Some(out.clone());
+                                                                        } else {
+                                                                            s.polished = Some(out.clone());
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let update = if mode == "translate" {
+                                                                serde_json::json!({"type":"enhanced","id":id,"translated":out,"src_lang":src_lang_clone})
+                                                            } else {
+                                                                serde_json::json!({"type":"enhanced","id":id,"polished":out})
+                                                            };
+                                                            let _ = st.events.send(update.to_string());
+                                                        }
+                                                        _ => {
+                                                            let err = serde_json::json!({
+                                                                "type":"error",
+                                                                "text": if mode == "translate" {"翻译失败，已保留原文"} else {"润色失败，已保留原文"}
+                                                            });
+                                                            let _ = st.events.send(err.to_string());
+                                                        }
+                                                    }
+                                                });
                                             }
                                         }
                                         Some(Err(e)) => {
@@ -631,8 +664,11 @@ async fn main() {
     println!("转写保存目录: {}", settings.transcripts_dir.display());
 
     let (events, _) = broadcast::channel::<String>(64);
-    let worker = AsrWorker::start(settings.model_dir.clone(), events.clone());
-    let polish = PolishWorker::start(settings.polish_model_dir.clone(), events.clone());
+    // MLX C++ 运行时非线程安全, ASR 与增强线程共享此锁串行化
+    let mlx_lock: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
+    let worker = AsrWorker::start(settings.model_dir.clone(), events.clone(), mlx_lock.clone());
+    let polish =
+        PolishWorker::start(settings.polish_model_dir.clone(), events.clone(), mlx_lock);
     let polish_available = settings.polish_available();
 
     if !polish_available {
@@ -672,6 +708,7 @@ async fn main() {
             config: domain_config,
         }),
         segments: Mutex::new(Vec::new()),
+        seg_id: AtomicU64::new(1),
         last_activity: Arc::new(Mutex::new(Instant::now())),
         last_saved: Mutex::new(None),
         events,

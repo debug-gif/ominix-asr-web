@@ -35,13 +35,17 @@ pub struct AsrWorker {
 }
 
 impl AsrWorker {
-    pub fn start(model_dir: PathBuf, events: tokio::sync::broadcast::Sender<String>) -> Self {
+    pub fn start(
+        model_dir: PathBuf,
+        events: tokio::sync::broadcast::Sender<String>,
+        mlx_lock: Arc<Mutex<()>>,
+    ) -> Self {
         let (tx, rx) = channel::<Cmd>();
         let model_loaded = Arc::new(AtomicBool::new(false));
         let flag = model_loaded.clone();
         let handle = std::thread::Builder::new()
             .name("asr-worker".into())
-            .spawn(move || worker_loop(rx, model_dir, flag, events))
+            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock))
             .expect("failed to spawn asr worker");
         AsrWorker {
             tx,
@@ -91,6 +95,7 @@ fn worker_loop(
     model_dir: PathBuf,
     model_loaded: Arc<AtomicBool>,
     events: tokio::sync::broadcast::Sender<String>,
+    mlx_lock: Arc<Mutex<()>>,
 ) {
     let mut model: Option<Qwen3ASR> = None;
     while let Ok(cmd) = rx.recv() {
@@ -102,6 +107,8 @@ fn worker_loop(
                 terms,
                 reply,
             } => {
+                // MLX 非线程安全: 与润色/翻译线程串行化
+                let _mlx_guard = mlx_lock.lock().unwrap();
                 if model.is_none() {
                     eprintln!("[asr] model not loaded, loading from {}...", model_dir.display());
                     let _ = events.send(
