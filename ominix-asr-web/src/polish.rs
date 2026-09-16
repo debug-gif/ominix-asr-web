@@ -151,16 +151,26 @@ fn worker_loop(
                 }
                 let t0 = std::time::Instant::now();
                 let result = polish(&mut state.as_mut().unwrap(), &text, &language);
+                let elapsed = t0.elapsed().as_secs_f32();
                 match &result {
-                    Ok(out) => eprintln!(
-                        "[polish] {} chars -> {} chars ({}ms)",
-                        text.chars().count(),
-                        out.chars().count(),
-                        t0.elapsed().as_millis()
-                    ),
+                    Ok((out, tokens)) => {
+                        let tok_s = *tokens as f32 / elapsed.max(0.001);
+                        eprintln!(
+                            "[polish] {} chars -> {} chars, {} tokens in {:.1}s ({:.1} tok/s)",
+                            text.chars().count(),
+                            out.chars().count(),
+                            tokens,
+                            elapsed,
+                            tok_s
+                        );
+                        let _ = events.send(
+                            serde_json::json!({"type":"tok_stat","mode":"polish","tokens":tokens,"secs":(elapsed*10.0).round()/10.0,"tok_s":(tok_s*10.0).round()/10.0})
+                                .to_string(),
+                        );
+                    }
                     Err(e) => eprintln!("[polish] error: {e}"),
                 }
-                let _ = reply.send(result);
+                let _ = reply.send(result.map(|(s, _)| s));
                 // 内存监控: 缓存池超过阈值时清理 (含图编译缓存)
                 let (active, cache) = mem::snapshot();
                 if cache > purge_threshold {
@@ -208,16 +218,26 @@ fn worker_loop(
                 }
                 let t0 = std::time::Instant::now();
                 let result = translate(&mut state.as_mut().unwrap(), &text, &target);
+                let elapsed = t0.elapsed().as_secs_f32();
                 match &result {
-                    Ok(out) => eprintln!(
-                        "[translate] {} chars -> {} ({}ms)",
-                        text.chars().count(),
-                        target,
-                        t0.elapsed().as_millis()
-                    ),
+                    Ok((out, tokens)) => {
+                        let tok_s = *tokens as f32 / elapsed.max(0.001);
+                        eprintln!(
+                            "[translate] {} chars -> {} chars, {} tokens in {:.1}s ({:.1} tok/s)",
+                            text.chars().count(),
+                            out.chars().count(),
+                            tokens,
+                            elapsed,
+                            tok_s
+                        );
+                        let _ = events.send(
+                            serde_json::json!({"type":"tok_stat","mode":"translate","tokens":tokens,"secs":(elapsed*10.0).round()/10.0,"tok_s":(tok_s*10.0).round()/10.0})
+                                .to_string(),
+                        );
+                    }
                     Err(e) => eprintln!("[translate] error: {e}"),
                 }
-                let _ = reply.send(result);
+                let _ = reply.send(result.map(|(s, _)| s));
                 // 内存监控: 缓存池超过阈值时清理 (含图编译缓存)
                 let (active, cache) = mem::snapshot();
                 if cache > purge_threshold {
@@ -261,7 +281,11 @@ fn load(model_dir: &PathBuf) -> Result<PolishModel, String> {
     })
 }
 
-fn polish(state: &mut PolishModel, text: &str, language: &str) -> Result<String, String> {
+fn polish(
+    state: &mut PolishModel,
+    text: &str,
+    language: &str,
+) -> Result<(String, usize), String> {
     // "Auto" 语言识别: 按转写文本的书写系统选择润色提示词
     let use_zh = if language == "Chinese" {
         true
@@ -274,11 +298,15 @@ fn polish(state: &mut PolishModel, text: &str, language: &str) -> Result<String,
     let system = if use_zh { ZH_SYSTEM } else { EN_SYSTEM };
     let max_tokens = (text.chars().count() * 2).clamp(512, 2048);
     let user_msg = format!("{system}\n\n待整理文本（引号内）：\n\"{text}\"\n\n请直接输出整理后的文本：");
-    let out = run_llm(state, &user_msg, max_tokens)?;
-    Ok(clean_output(&out))
+    let (out, tokens) = run_llm(state, &user_msg, max_tokens)?;
+    Ok((clean_output(&out), tokens))
 }
 
-fn translate(state: &mut PolishModel, text: &str, target: &str) -> Result<String, String> {
+fn translate(
+    state: &mut PolishModel,
+    text: &str,
+    target: &str,
+) -> Result<(String, usize), String> {
     let is_cjk_target = target.contains('中')
         || target == "Chinese"
         || target == "日本語"
@@ -290,8 +318,8 @@ fn translate(state: &mut PolishModel, text: &str, target: &str) -> Result<String
     };
     let max_tokens = (text.chars().count() * 2).clamp(512, 2048);
     let user_msg = format!("{system}\n\n待翻译文本（引号内）：\n\"{text}\"\n\n请直接输出译文：");
-    let out = run_llm(state, &user_msg, max_tokens)?;
-    Ok(clean_output(&out))
+    let (out, tokens) = run_llm(state, &user_msg, max_tokens)?;
+    Ok((clean_output(&out), tokens))
 }
 
 /// 剥离常见的提示词泄漏片段（模型偶尔会回显指令前缀/客套话）
@@ -351,7 +379,11 @@ fn clean_output(out: &str) -> String {
     s
 }
 
-fn run_llm(state: &mut PolishModel, user_msg: &str, max_tokens: usize) -> Result<String, String> {
+fn run_llm(
+    state: &mut PolishModel,
+    user_msg: &str,
+    max_tokens: usize,
+) -> Result<(String, usize), String> {
     let conversations = vec![Conversation {
         role: Role::User,
         content: user_msg,
@@ -424,7 +456,7 @@ fn run_llm(state: &mut PolishModel, user_msg: &str, max_tokens: usize) -> Result
     if out.is_empty() {
         Err("生成结果为空".to_string())
     } else {
-        Ok(out)
+        Ok((out, tokens.len()))
     }
 }
 

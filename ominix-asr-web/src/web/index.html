@@ -74,6 +74,7 @@ label.small { font-size: 13px; color: var(--dim); display: flex; align-items: ce
       <span class="badge off" id="modelBadge">ASR 未加载</span>
       <span class="badge off" id="polishBadge">增强未加载</span>
       <span class="badge" id="memBadge">内存 -</span>
+      <span class="badge" id="tokBadge">生成速度 -</span>
       <span class="badge" id="idleBadge">空闲 -</span>
     </div>
   </header>
@@ -240,6 +241,8 @@ function connectWS() {
       if (m.loading) { b.textContent = '增强模型加载中…'; b.className = 'badge off'; }
       else if (m.loaded) { b.textContent = '增强模型已加载'; b.className = 'badge on'; }
       else { b.textContent = '增强模型未加载'; b.className = 'badge off'; }
+    } else if (m.type === 'tok_stat') {
+      $('tokBadge').textContent = `生成速度 ${m.tok_s} tok/s (${m.tokens} tokens / ${m.secs}s)`;
     } else if (m.type === 'enhance_applied') {
       if (!m.available) toast('增强模型不可用（未找到模型文件）');
       $('enhanceMode').value = m.mode;
