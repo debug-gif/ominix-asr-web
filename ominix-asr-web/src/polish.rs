@@ -20,6 +20,7 @@ pub enum PolishCmd {
         language: String,
         terms: Vec<String>,
         context: String,
+        domain: String,
         reply: Sender<Result<String, String>>,
     },
     Translate {
@@ -84,6 +85,7 @@ impl PolishWorker {
         language: String,
         terms: Vec<String>,
         context: String,
+        domain: String,
     ) -> Receiver<Result<String, String>> {
         let (reply, recv) = channel();
         let _ = self.tx.send(PolishCmd::Polish {
@@ -91,6 +93,7 @@ impl PolishWorker {
             language,
             terms,
             context,
+            domain,
             reply,
         });
         recv
@@ -131,6 +134,7 @@ fn worker_loop(
                 language,
                 terms,
                 context,
+                domain,
                 reply,
             } => {
                 // MLX 非线程安全: 与 ASR 线程串行化
@@ -162,7 +166,14 @@ fn worker_loop(
                     }
                 }
                 let t0 = std::time::Instant::now();
-                let result = polish(&mut state.as_mut().unwrap(), &text, &language, &terms, &context);
+                let result = polish(
+                    &mut state.as_mut().unwrap(),
+                    &text,
+                    &language,
+                    &terms,
+                    &context,
+                    &domain,
+                );
                 let elapsed = t0.elapsed().as_secs_f32();
                 match &result {
                     Ok((out, tokens)) => {
@@ -299,6 +310,7 @@ fn polish(
     language: &str,
     terms: &[String],
     context: &str,
+    domain: &str,
 ) -> Result<(String, usize), String> {
     // "Auto" 语言识别: 按转写文本的书写系统选择润色提示词
     let use_zh = if language == "Chinese" {
@@ -315,26 +327,52 @@ fn polish(
     // L1: 术语对照表注入 (错误|正确 配对 + 需保护的术语, 最多 30 条)
     let glossary = build_glossary(terms, use_zh);
 
-    // L2: 上下文受限 — 附带上文(仅供参考, 不得修改)
+    // 领域提示词注入润色 (可选): 作为背景信息, 三铁律仍为主指令
     let mut user_msg = String::new();
     user_msg.push_str(system);
+    if !domain.trim().is_empty() {
+        let d = if domain.chars().count() > 200 {
+            domain.chars().take(200).collect::<String>()
+        } else {
+            domain.to_string()
+        };
+        if use_zh {
+            user_msg.push_str("\n\n领域背景（仅用于理解语境，不得加入输出）：\n");
+        } else {
+            user_msg.push_str("\n\nDomain context (for understanding only, do not add to output):\n");
+        }
+        user_msg.push_str(&d);
+    }
+    // L2: 上下文受限 — 附带上文(仅供参考, 不得修改)
     if !context.trim().is_empty() {
-        let ctx = if context.chars().count() > 300 {
-            context.chars().take(300).collect::<String>()
+        let ctx = if context.chars().count() > 1000 {
+            context.chars().take(1000).collect::<String>()
         } else {
             context.to_string()
         };
-        user_msg.push_str("\n\n上文（仅供参考，不要修改）：\n");
+        if use_zh {
+            user_msg.push_str("\n\n上文（仅供参考，不要修改）：\n");
+        } else {
+            user_msg.push_str("\n\nPrevious context (for reference only, do not modify):\n");
+        }
         user_msg.push_str(&ctx);
     }
     user_msg.push_str("\n\n当前段（引号内）：\n\"");
     user_msg.push_str(text);
     user_msg.push('"');
     if !glossary.is_empty() {
-        user_msg.push_str("\n\n术语对照表（左侧→右侧）：\n");
+        if use_zh {
+            user_msg.push_str("\n\n术语对照表（左侧→右侧）：\n");
+        } else {
+            user_msg.push_str("\n\nTerm glossary (left → right):\n");
+        }
         user_msg.push_str(&glossary);
     }
-    user_msg.push_str("\n\n请仅修正当前段，直接输出修正后的文本：");
+    if use_zh {
+        user_msg.push_str("\n\n请仅修正当前段，直接输出修正后的文本：");
+    } else {
+        user_msg.push_str("\n\nCorrect only the current segment and output the corrected text directly:");
+    }
 
     let (out, tokens) = run_llm(state, &user_msg, max_tokens)?;
     Ok((clean_output(&out), tokens))

@@ -532,6 +532,10 @@ struct WsCmd {
     target: Option<String>,
     #[serde(default)]
     stype: Option<String>,
+    #[serde(default)]
+    domain: Option<bool>,
+    #[serde(default)]
+    ctx: Option<u32>,
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -545,6 +549,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let mut terms: Vec<String> = Vec::new();
     let mut enhance_mode = String::from("polish");
     let mut target_lang = String::from("English");
+    let mut polish_domain = false;
+    let mut polish_ctx: usize = 2;
     let mut event_rx = state.events.subscribe();
 
     // 连接时推送当前领域配置
@@ -618,18 +624,29 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                                  let mode = enhance_mode.clone();
                                                  let tgt = target_lang.clone();
                                                  let src_lang_clone = src_lang.clone();
-                                                 // L2: 上文上下文(前2段, 优先润色后文本)
+                                                 // L2: 滑动上下文窗口(前 N 段, 优先润色后文本, 上限 1000 字)
                                                  let context = {
                                                      let segs = st.segments.lock().unwrap_or_else(|e| e.into_inner());
                                                      let pos = segs.iter().position(|s| s.id == id).unwrap_or(segs.len());
-                                                     let start = pos.saturating_sub(2);
-                                                     segs[start..pos]
+                                                     let start = pos.saturating_sub(polish_ctx);
+                                                     let joined = segs[start..pos]
                                                          .iter()
                                                          .map(|s| {
                                                              s.polished.clone().unwrap_or_else(|| s.text.clone())
                                                          })
                                                          .collect::<Vec<_>>()
-                                                         .join("\n")
+                                                         .join("\n");
+                                                     if joined.chars().count() > 1000 {
+                                                         joined.chars().take(1000).collect()
+                                                     } else {
+                                                         joined
+                                                     }
+                                                 };
+                                                 // 领域提示词注入润色 (可选)
+                                                 let domain_text = if polish_domain {
+                                                     system_prompt.clone()
+                                                 } else {
+                                                     String::new()
                                                  };
                                                  let terms_clone = terms.clone();
                                                  tokio::spawn(async move {
@@ -637,6 +654,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                                      let mode2 = mode.clone();
                                                      let terms2 = terms_clone.clone();
                                                      let ctx2 = context.clone();
+                                                     let dom2 = domain_text.clone();
                                                      let result = tokio::task::spawn_blocking(move || {
                                                          let rx = if mode2 == "translate" {
                                                              st2.polish.translate(text.clone(), tgt)
@@ -646,6 +664,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                                                  "Auto".to_string(),
                                                                  terms2,
                                                                  ctx2,
+                                                                 dom2,
                                                              )
                                                          };
                                                          rx.recv().ok().and_then(|r| r.ok())
@@ -868,24 +887,32 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     });
                                     let _ = socket.send(Message::Text(msg.to_string().into())).await;
                                 }
-                                "enhance" => {
-                                    let mode = cmd.mode.unwrap_or_else(|| "polish".to_string());
-                                    enhance_mode = match mode.as_str() {
-                                        "translate" => "translate".to_string(),
-                                        "polish" => "polish".to_string(),
-                                        _ => "off".to_string(),
-                                    };
-                                    if let Some(t) = cmd.target {
-                                        target_lang = t;
-                                    }
-                                    let msg = serde_json::json!({
-                                        "type": "enhance_applied",
-                                        "mode": enhance_mode,
-                                        "target": target_lang,
-                                        "available": state.polish_available,
-                                    });
-                                    let _ = socket.send(Message::Text(msg.to_string().into())).await;
-                                }
+                                 "enhance" => {
+                                     let mode = cmd.mode.unwrap_or_else(|| "polish".to_string());
+                                     enhance_mode = match mode.as_str() {
+                                         "translate" => "translate".to_string(),
+                                         "polish" => "polish".to_string(),
+                                         _ => "off".to_string(),
+                                     };
+                                     if let Some(t) = cmd.target {
+                                         target_lang = t;
+                                     }
+                                     if let Some(d) = cmd.domain {
+                                         polish_domain = d;
+                                     }
+                                     if let Some(c) = cmd.ctx {
+                                         polish_ctx = (c as usize).min(10);
+                                     }
+                                     let msg = serde_json::json!({
+                                         "type": "enhance_applied",
+                                         "mode": enhance_mode,
+                                         "target": target_lang,
+                                         "domain": polish_domain,
+                                         "ctx": polish_ctx,
+                                         "available": state.polish_available,
+                                     });
+                                     let _ = socket.send(Message::Text(msg.to_string().into())).await;
+                                 }
                                 "clear" => {
                                     if let Ok(mut s) = state.segments.lock() {
                                         s.clear();

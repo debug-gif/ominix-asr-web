@@ -166,6 +166,15 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
             <option value="Русский">Русский</option>
           </select>
         </div>
+        <div class="row" id="polishOpts">
+          <label class="small"><input type="checkbox" id="polishDomain"> 领域提示词注入润色</label>
+          <span class="lbl">上文窗口</span>
+          <select id="polishCtx" style="flex:1">
+            <option value="0">关闭(最快)</option>
+            <option value="2" selected>轻量(前2段)</option>
+            <option value="6">滑动(前6段,稍慢)</option>
+          </select>
+        </div>
         <button class="primary wide" id="btnMic">开始录音</button>
         <label class="small"><input type="checkbox" id="autoSave" checked> 自动保存(每60秒)</label>
         <div id="vumeter"><div class="bar" id="vubar"></div></div>
@@ -356,7 +365,10 @@ function connectWS() {
       $('enhanceMode').value = m.mode;
       $('targetLang').style.display = m.mode === 'translate' ? '' : 'none';
       $('targetLbl').style.display = m.mode === 'translate' ? '' : 'none';
+      $('polishOpts').style.display = m.mode === 'polish' ? '' : 'none';
       $('targetLang').value = m.target || 'English';
+      if (m.domain !== undefined) $('polishDomain').checked = !!m.domain;
+      if (m.ctx !== undefined) $('polishCtx').value = String(m.ctx);
     } else if (m.type === 'status') {
       setModel(!!m.model_loaded, !!m.loading);
       if (m.model_loaded === false && !m.loading) toast('模型已从内存卸载（空闲超时）');
@@ -639,19 +651,26 @@ $('btnReloadDomain').onclick = () => {
   }
 };
 
-$('enhanceMode').onchange = () => {
+function sendEnhance() {
   const mode = $('enhanceMode').value;
   $('targetLang').style.display = mode === 'translate' ? '' : 'none';
   $('targetLbl').style.display = mode === 'translate' ? '' : 'none';
+  $('polishOpts').style.display = mode === 'polish' ? '' : 'none';
   if (ws && wsReady) {
-    ws.send(JSON.stringify({type:'enhance', mode, target: $('targetLang').value}));
+    ws.send(JSON.stringify({
+      type: 'enhance',
+      mode,
+      target: $('targetLang').value,
+      domain: $('polishDomain').checked,
+      ctx: parseInt($('polishCtx').value, 10)
+    }));
   }
-};
-$('targetLang').onchange = () => {
-  if (ws && wsReady) {
-    ws.send(JSON.stringify({type:'enhance', mode: $('enhanceMode').value, target: $('targetLang').value}));
-  }
-};
+}
+$('enhanceMode').onchange = sendEnhance;
+$('targetLang').onchange = sendEnhance;
+$('polishDomain').onchange = sendEnhance;
+$('polishCtx').onchange = sendEnhance;
+$('polishOpts').style.display = $('enhanceMode').value === 'polish' ? '' : 'none';
 
 async function pollStatus() {
   try {
