@@ -10,11 +10,10 @@ const FRAME: usize = 400; // 25ms @ 16kHz
 const HOP: usize = 160; // 10ms
 const FFT_N: usize = 512; // 零填充到 512
 
-const OVERSUB: f32 = 1.3; // 过减因子 (温和, 防削掉弱音节)
-const NOISE_BIAS: f32 = 1.2; // 噪声均值→瞬时值偏差修正 (Rayleigh)
-const GAIN_FLOOR: f32 = 0.12; // 最大压制约 18dB (留有余地, 防"水声")
+const OVERSUB: f32 = 2.0; // 过减因子
+const NOISE_BIAS: f32 = 1.4; // 噪声均值→瞬时值偏差修正 (Rayleigh)
+const GAIN_FLOOR: f32 = 0.05; // 最大压制约 26dB
 const TARGET_RMS: f32 = 0.08; // 响度归一目标 (-22 dBFS)
-const GATE_RATIO: f32 = 0.12; // 噪声/信号幅度比低于此值 → 直通(干净音频不受损)
 
 fn hann(i: usize, n: usize) -> f32 {
     0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos()
@@ -55,55 +54,18 @@ pub fn suppress(samples: &[f32]) -> Vec<f32> {
         frames.push(buf);
     }
 
-    // ── 2. 噪声谱估计 ──────────────────────────────────────────
-    // 首选段尾静音区(最后 25% 帧, VAD 挂起静音是天然噪声参考);
-    // 若尾部能量高(无静音尾), 回退到最安静的 15% 帧
-    let mean_frame_mag: f32 = {
-        let mut s = 0.0f32;
-        let mut c = 0u32;
-        for f in &frames {
-            for b in 0..n_bins {
-                s += f[b].norm();
-                c += 1;
-            }
-        }
-        s / c as f32
-    };
-
+    // ── 2. 噪声谱估计: 最安静的 15% 帧的平均幅度谱 ──────────────
     let mut order: Vec<usize> = (0..n_frames).collect();
     order.sort_by(|&a, &b| frame_energy[a].partial_cmp(&frame_energy[b]).unwrap());
     let quiet_n = (n_frames as f32 * 0.15).max(1.0) as usize;
-
-    let tail_start = n_frames.saturating_sub(n_frames / 4);
-    let tail_energy: f32 = (tail_start..n_frames).map(|k| frame_energy[k]).sum::<f32>()
-        / (n_frames - tail_start).max(1) as f32;
-    let quiet_energy = order[..quiet_n]
-        .iter()
-        .map(|&k| frame_energy[k])
-        .sum::<f32>()
-        / quiet_n as f32;
-
-    let use_tail = tail_energy < quiet_energy * 1.8;
-    let noise_frames: Vec<usize> = if use_tail {
-        (tail_start..n_frames).collect()
-    } else {
-        order[..quiet_n].to_vec()
-    };
-
     let mut noise = vec![0.0f32; n_bins];
-    for &k in &noise_frames {
+    for &k in &order[..quiet_n] {
         for b in 0..n_bins {
             noise[b] += frames[k][b].norm();
         }
     }
     for b in noise.iter_mut() {
-        *b = *b / noise_frames.len() as f32 * NOISE_BIAS;
-    }
-    let mean_noise: f32 = noise.iter().sum::<f32>() / n_bins as f32;
-
-    // ── 2.5 智能门控: 噪声地板过低 → 干净音频, 直通不处理 ──────
-    if mean_noise < mean_frame_mag * GATE_RATIO {
-        return samples.to_vec();
+        *b = *b / quiet_n as f32 * NOISE_BIAS;
     }
 
     // ── 3. 维纳增益 (功率谱减) ─────────────────────────────────
@@ -176,43 +138,16 @@ mod tests {
     }
 
     #[test]
-    fn pure_noise_is_attenuated() {
-        // 温和参数下的纯噪声段: 保证有实质压制即可(≈-5dB),
-        // 过度追求压制会引入音乐噪声损害 ASR
+    fn pure_noise_is_strongly_attenuated() {
         let mut seed = 42u32;
         let x = noise(&mut seed, 16000, 0.1);
         let y = suppress(&x);
         assert!(
-            rms(&y) < rms(&x) * 0.75,
-            "噪声无压制: {} vs {}",
+            rms(&y) < rms(&x) * 0.25,
+            "噪声未充分抑制: {} vs {}",
             rms(&y),
             rms(&x)
         );
-    }
-
-    #[test]
-    fn clean_speech_passthrough_via_gate() {
-        // 干净语音(无噪声底)必须直通, 不得削掉弱音节 — 回归测试
-        let fs = 16000;
-        let mut clean = vec![0.0f32; fs];
-        for k in 0..5 {
-            let start = k * 2400;
-            for i in 0..640 {
-                let t = i as f32 / fs as f32;
-                clean[start + i] = 0.25 * (2.0 * std::f32::consts::PI * 440.0 * t).sin();
-            }
-        }
-        let y = suppress(&clean);
-        let corr = {
-            let (mut a, mut b, mut c) = (0.0f32, 0.0f32, 0.0f32);
-            for i in 0..fs {
-                a += clean[i] * y[i];
-                b += clean[i] * clean[i];
-                c += y[i] * y[i];
-            }
-            a / (b.sqrt() * c.sqrt() + 1e-9)
-        };
-        assert!(corr > 0.99, "干净语音被改动, 相关度 {corr}");
     }
 
     #[test]
