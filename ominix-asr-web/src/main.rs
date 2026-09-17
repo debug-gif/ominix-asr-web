@@ -1,4 +1,5 @@
 mod domain;
+mod enhance;
 mod mem;
 mod polish;
 mod summary;
@@ -36,6 +37,7 @@ struct Settings {
     language: String,
     mlx_memory_limit_mb: usize,
     mlx_purge_threshold_mb: usize,
+    dereverb: bool,
 }
 
 impl Settings {
@@ -77,6 +79,7 @@ impl Settings {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(768),
+            dereverb: std::env::var("OMINIX_DEREVERB").map(|v| v != "0").unwrap_or(true),
         }
     }
 
@@ -965,6 +968,7 @@ async fn main() {
         events.clone(),
         mlx_lock.clone(),
         purge_threshold,
+        settings.dereverb,
     );
     let polish = PolishWorker::start(
         settings.polish_model_dir.clone(),
