@@ -6,7 +6,6 @@ use std::thread::JoinHandle;
 
 use qwen3_asr_mlx::Qwen3ASR;
 
-use crate::enhance;
 use crate::mem;
 
 pub enum Cmd {
@@ -39,14 +38,13 @@ impl AsrWorker {
         events: tokio::sync::broadcast::Sender<String>,
         mlx_lock: Arc<Mutex<()>>,
         purge_threshold: usize,
-        dereverb: bool,
     ) -> Self {
         let (tx, rx) = channel::<Cmd>();
         let model_loaded = Arc::new(AtomicBool::new(false));
         let flag = model_loaded.clone();
         let handle = std::thread::Builder::new()
             .name("asr-worker".into())
-            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock, purge_threshold, dereverb))
+            .spawn(move || worker_loop(rx, model_dir, flag, events, mlx_lock, purge_threshold))
             .expect("failed to spawn asr worker");
         AsrWorker {
             tx,
@@ -98,7 +96,6 @@ fn worker_loop(
     events: tokio::sync::broadcast::Sender<String>,
     mlx_lock: Arc<Mutex<()>>,
     purge_threshold: usize,
-    dereverb: bool,
 ) {
     let mut model: Option<Qwen3ASR> = None;
     while let Ok(cmd) = rx.recv() {
@@ -140,8 +137,6 @@ fn worker_loop(
                     }
                 }
                 let t0 = std::time::Instant::now();
-                // P1: 段级频谱增强(去晚期混响) + 响度归一
-                let samples = if dereverb { enhance::enhance(&samples) } else { samples };
                 let system_prompt = if system.trim().is_empty() {
                     None
                 } else {

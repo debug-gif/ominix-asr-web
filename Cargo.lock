@@ -1659,7 +1659,6 @@ dependencies = [
  "pinyin",
  "qwen3-asr-mlx",
  "qwen3-mlx",
- "rustfft",
  "serde",
  "serde_json",
  "tokenizers 0.21.4",
