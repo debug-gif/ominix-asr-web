@@ -25,7 +25,7 @@ Real-time speech recognition + AI enhancement WebUI on Apple Silicon (M1/M2/M3/M
 - **Three-column layout** (Codex style) — left console / middle live transcript / right summary & export; **draggable dividers** resize columns (persisted)
 - **Subtitle mode** — detached semi-transparent subtitle window: large translated/polished text + small original text; adjustable font size, box width, opacity, position; Chrome supports always-on-top Picture-in-Picture
 - **Newest-on-top** transcript & summary lists
-- **Saving** — transcripts and summaries saved to `transcripts/` (manual / auto-save), downloadable in browser
+- **Saving** — transcripts and summaries saved to `transcripts/` (manual / auto-save), downloadable in browser; **export mode**: 原文+翻译 / 仅原文 / 仅翻译
 
 ### 性能与稳定性
 - **MLX memory management** — soft memory limit, automatic cache + graph-compile-cache purge on threshold, live memory badge
@@ -100,7 +100,7 @@ Created automatically on first run. Edit with any text editor; changes apply aut
 | WS | `/ws` | Binary PCM f32 16kHz mono → transcription; JSON control messages |
 | GET | `/api/status` | Models / idle / memory / segment status |
 | GET | `/api/domain` | Current domain config |
-| POST | `/api/save` | Save transcript (with AI summaries appended) |
+| POST | `/api/save` | Save transcript; body `{"mode":"both\|original\|enhanced"}` |
 | POST | `/api/save_summary` | Save summaries to a separate file |
 | POST | `/api/unload` | Manually unload all models |
 | POST | `/api/clear` | Clear current transcript |

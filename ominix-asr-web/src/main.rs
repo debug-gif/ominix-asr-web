@@ -263,7 +263,8 @@ fn detect_lang(text: &str) -> &'static str {
     }
 }
 
-fn save_transcript(state: &Arc<AppState>) -> Result<String, String> {
+/// 导出模式: original=仅原文, enhanced=仅翻译/润色, both=原文+翻译(默认)
+fn save_transcript(state: &Arc<AppState>, mode: &str) -> Result<String, String> {
     let segments = state
         .segments
         .lock()
@@ -274,24 +275,51 @@ fn save_transcript(state: &Arc<AppState>) -> Result<String, String> {
     std::fs::create_dir_all(&state.settings.transcripts_dir)
         .map_err(|e| format!("创建目录失败: {e}"))?;
     let ts = Local::now().format("%Y%m%d_%H%M%S");
+    let mode_suffix = match mode {
+        "original" => "原文",
+        "enhanced" => "译文",
+        _ => "",
+    };
     let path = state
         .settings
         .transcripts_dir
-        .join(format!("转写_{ts}.txt"));
+        .join(if mode_suffix.is_empty() {
+            format!("转写_{ts}.txt")
+        } else {
+            format!("转写_{mode_suffix}_{ts}.txt")
+        });
     let mut content = String::new();
-    content.push_str("# 实时语音转写记录\n");
+    content.push_str(&format!("# 实时语音转写记录（{mode_label}）\n", mode_label = match mode {
+        "original" => "原文",
+        "enhanced" => "翻译/润色",
+        _ => "原文+翻译",
+    }));
     content.push_str(&format!("# 保存时间: {}\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
     content.push_str(&format!("# 共 {} 段\n\n", segments.len()));
     for s in segments.iter() {
-        match (&s.polished, &s.translated) {
-            (Some(p), _) => {
-                content.push_str(&format!("[{}] {}\n      润色: {}\n", s.ts, s.text, p));
-            }
-            (_, Some(t)) => {
-                content.push_str(&format!("[{}] {}\n      翻译: {}\n", s.ts, s.text, t));
-            }
-            (None, None) => {
+        match mode {
+            "original" => {
                 content.push_str(&format!("[{}] {}\n", s.ts, s.text));
+            }
+            "enhanced" => {
+                match (&s.polished, &s.translated) {
+                    (Some(p), _) => content.push_str(&format!("[{}] {}\n", s.ts, p)),
+                    (_, Some(t)) => content.push_str(&format!("[{}] {}\n", s.ts, t)),
+                    (None, None) => content.push_str(&format!("[{}] {}\n", s.ts, s.text)),
+                }
+            }
+            _ => {
+                match (&s.polished, &s.translated) {
+                    (Some(p), _) => {
+                        content.push_str(&format!("[{}] {}\n      润色: {}\n", s.ts, s.text, p));
+                    }
+                    (_, Some(t)) => {
+                        content.push_str(&format!("[{}] {}\n      翻译: {}\n", s.ts, s.text, t));
+                    }
+                    (None, None) => {
+                        content.push_str(&format!("[{}] {}\n", s.ts, s.text));
+                    }
+                }
             }
         }
     }
@@ -357,8 +385,21 @@ async fn api_status(State(state): State<Arc<AppState>>) -> Json<StatusResp> {
     })
 }
 
-async fn api_save(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    match save_transcript(&state) {
+#[derive(Deserialize)]
+struct SaveReq {
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+async fn api_save(
+    State(state): State<Arc<AppState>>,
+    payload: Option<Json<SaveReq>>,
+) -> Json<serde_json::Value> {
+    let mode = payload
+        .and_then(|p| p.0.mode)
+        .filter(|m| m == "original" || m == "enhanced" || m == "both")
+        .unwrap_or_else(|| "both".to_string());
+    match save_transcript(&state, &mode) {
         Ok(path) => Json(serde_json::json!({"ok": true, "path": path})),
         Err(e) => Json(serde_json::json!({"ok": false, "error": e})),
     }
@@ -684,7 +725,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                     }
                                 }
                                 "save" => {
-                                    let resp = match save_transcript(&state) {
+                                    let mode = cmd
+                                        .mode
+                                        .clone()
+                                        .filter(|m| m == "original" || m == "enhanced" || m == "both")
+                                        .unwrap_or_else(|| "both".to_string());
+                                    let resp = match save_transcript(&state, &mode) {
                                         Ok(path) => serde_json::json!({"type":"saved","path":path}),
                                         Err(e) => serde_json::json!({"type":"error","text":e}),
                                     };

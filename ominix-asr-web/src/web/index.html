@@ -241,6 +241,14 @@ label.small { font-size: 12px; color: var(--dim); display: flex; align-items: ce
     </div>
     <div class="panel">
       <h3>导出</h3>
+      <div class="row" style="margin-bottom:8px">
+        <span class="lbl">导出内容</span>
+        <select id="exportMode" style="flex:1" title="导出内容">
+          <option value="both" selected>原文+翻译</option>
+          <option value="original">仅原文</option>
+          <option value="enhanced">仅翻译/润色</option>
+        </select>
+      </div>
       <button class="wide" id="btnSubtitle">字幕模式</button>
       <button class="wide" id="btnSave">保存转写</button>
       <button class="wide" id="btnDownload">下载最近保存</button>
@@ -569,8 +577,15 @@ async function listDevices(verbose) {
 }
 navigator.mediaDevices.addEventListener('devicechange', () => listDevices(false));
 listDevices(false);
+function saveTranscript() {
+  return fetch('/api/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: $('exportMode').value })
+  });
+}
 $('btnSave').onclick = async () => {
-  const r = await fetch('/api/save', { method: 'POST' });
+  const r = await saveTranscript();
   const j = await r.json();
   toast(j.ok ? '已保存: ' + j.path : '保存失败: ' + (j.error || '') , 4000);
 };
@@ -612,7 +627,7 @@ $('btnSaveSummary').onclick = async () => {
 };
 $('autoSave').onchange = () => {
   clearInterval(timerAuto);
-  if ($('autoSave').checked) timerAuto = setInterval(() => fetch('/api/save', { method: 'POST' }), 60000);
+  if ($('autoSave').checked) timerAuto = setInterval(() => saveTranscript(), 60000);
 };
 
 $('btnReloadDomain').onclick = () => {
@@ -672,7 +687,7 @@ async function pollStatus() {
 connectWS();
 pollStatus();
 timerPoll = setInterval(pollStatus, 5000);
-if ($('autoSave').checked) timerAuto = setInterval(() => fetch('/api/save', { method: 'POST' }), 60000);
+if ($('autoSave').checked) timerAuto = setInterval(() => saveTranscript(), 60000);
 
 // ── 三栏宽度拖动调整 ────────────────────────────────────────────
 (function initGrips() {
