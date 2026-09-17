@@ -213,6 +213,10 @@ pub fn idle_secs(activity: &Arc<Mutex<std::time::Instant>>) -> u64 {
 // ── 术语纠错 ────────────────────────────────────────────────────
 
 fn levenshtein(a: &[char], b: &[char]) -> usize {
+    lev(a, b)
+}
+
+fn lev<T: PartialEq>(a: &[T], b: &[T]) -> usize {
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     let mut cur = vec![0usize; b.len() + 1];
     for (i, ca) in a.iter().enumerate() {
@@ -228,8 +232,46 @@ fn levenshtein(a: &[char], b: &[char]) -> usize {
     prev[b.len()]
 }
 
+use pinyin::ToPinyin;
+
+/// 拼音序列(不带声调); 含非汉字字符时返回 None
+fn pinyin_plain_seq(s: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for c in s.chars() {
+        out.push(c.to_pinyin()?.plain().to_string());
+    }
+    Some(out)
+}
+
+/// 拼音序列(带声调); 含非汉字字符时返回 None
+fn pinyin_tone_seq(s: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for c in s.chars() {
+        out.push(c.to_pinyin()?.with_tone().to_string());
+    }
+    Some(out)
+}
+
+/// L0: 拼音近音匹配 — 中文同音/近音错字比字符编辑距离更常见
+fn pinyin_match(w: &str, window: &str, n: usize) -> bool {
+    let (Some(wp), Some(up)) = (pinyin_plain_seq(w), pinyin_plain_seq(window)) else {
+        return false;
+    };
+    if n == 2 {
+        // 双字词要求声调完全一致, 防止"响亮→向量"这类误伤
+        match (pinyin_tone_seq(w), pinyin_tone_seq(window)) {
+            (Some(wt), Some(ut)) => wt == ut,
+            _ => false,
+        }
+    } else {
+        let d = lev(&wp, &up);
+        d == 0 || d <= 1
+    }
+}
+
 /// 术语纠错: 每行一个词, 或 "常见错误写法|正确写法" 成对。
-/// 1) 精确替换错误写法; 2) 对术语做滑动窗口模糊匹配 (编辑距离阈值随词长放宽)。
+/// 1) 精确替换错误写法;
+/// 2) 滑动窗口模糊匹配: 字符编辑距离 + 拼音近音匹配 (L0)
 fn correct_terms(text: &str, terms: &[String]) -> String {
     if terms.is_empty() {
         return text.to_string();
@@ -260,7 +302,7 @@ fn correct_terms(text: &str, terms: &[String]) -> String {
     for (w, r) in &pairs {
         let wc: Vec<char> = w.chars().collect();
         let n = wc.len();
-        if n < 3 || n > 24 {
+        if n < 2 || n > 24 {
             continue;
         }
         let threshold = if n >= 6 { 2 } else { 1 };
@@ -271,7 +313,8 @@ fn correct_terms(text: &str, terms: &[String]) -> String {
             if i + n <= chars.len() {
                 let window: Vec<char> = chars[i..i + n].to_vec();
                 let d = levenshtein(&window, &wc);
-                if d > 0 && d <= threshold {
+                let py = d > 0 && pinyin_match(w, &window.iter().collect::<String>(), n);
+                if (d > 0 && d <= threshold) || py {
                     out.push_str(r);
                     i += n;
                     continue;
@@ -330,5 +373,36 @@ mod tests {
     #[test]
     fn empty_terms_passthrough() {
         assert_eq!(correct_terms("原样输出", &[]), "原样输出");
+    }
+
+    // ── L0: 拼音近音匹配 ────────────────────────────────────────
+
+    #[test]
+    fn pinyin_homophone_two_chars() {
+        // 相量(xiàng liàng) 与 向量(xiàng liàng) 声调一致 → 纠正
+        let terms = vec!["向量".to_string()];
+        assert_eq!(correct_terms("这是相量计算", &terms), "这是向量计算");
+        // 响亮(xiǎng liàng) 声调不同 → 不误伤
+        assert_eq!(correct_terms("声音很响亮", &terms), "声音很响亮");
+    }
+
+    #[test]
+    fn pinyin_near_homophone_long_term() {
+        // 神精网络(shén jīng wǎng luò) vs 神经网络(shén jīng wǎng luò) 拼音一致
+        let terms = vec!["神经网络".to_string()];
+        assert_eq!(correct_terms("使用神精网络模型", &terms), "使用神经网络模型");
+    }
+
+    #[test]
+    fn pinyin_one_syllable_edit() {
+        // 量子记算(jì suàn 相近) → 量子计算, 3字词允许 1 个音节差异
+        let terms = vec!["量子计算".to_string()];
+        assert_eq!(correct_terms("量子记算技术", &terms), "量子计算技术");
+    }
+
+    #[test]
+    fn pinyin_pair_wrong_right() {
+        let terms = vec!["相量|向量".to_string()];
+        assert_eq!(correct_terms("相量分析", &terms), "向量分析");
     }
 }

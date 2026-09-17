@@ -18,6 +18,8 @@ pub enum PolishCmd {
     Polish {
         text: String,
         language: String,
+        terms: Vec<String>,
+        context: String,
         reply: Sender<Result<String, String>>,
     },
     Translate {
@@ -40,16 +42,20 @@ struct PolishModel {
     chat_template: String,
 }
 
-const ZH_SYSTEM: &str = "你是一位专业的文稿编辑。请将用户的语音转写草稿整理为流畅的书面讲稿：\
-删除语气词、口头禅和填充词（如\"嗯\"\"啊\"\"那个\"\"然后\"），合并或删除重复啰嗦的表达，\
-并根据上下文修正明显的同音字和转写错误。保持原意不变，保留专业术语与数字，\
-不要补充原文没有的信息。直接输出整理后的文本，不要任何解释。";
+// L1: 最小编辑模式 — 三铁律 + 1-shot 示例, 提示词保持简洁
+const ZH_SYSTEM: &str = "你是文本最小修正器。只做三件事，其余逐字原样输出：\n\
+1. 删除口癖词（嗯、啊、那个、就是说等）\n\
+2. 合并相邻重复表达\n\
+3. 按下方术语对照表替换（左侧→右侧）\n\
+不得改写句意、不得修饰措辞、不得增删信息。\n\n\
+示例：\n输入：嗯那个，我们用了神剑网络模型\n输出：我们用了神经网络模型";
 
-const EN_SYSTEM: &str = "You are a professional transcript editor. Rewrite the user's raw \
-speech-to-text draft into fluent written language: remove filler words and verbal tics, \
-merge repeated expressions, and fix obvious homophone or transcription errors based on context. \
-Keep the original meaning, preserve technical terms and numbers, and do not add new information. \
-Output only the polished text, with no explanation.";
+const EN_SYSTEM: &str = "You are a minimal text editor. Do only these three things, output the rest verbatim:\n\
+1. Remove filler words (um, uh, you know, etc.)\n\
+2. Merge adjacent repeated expressions\n\
+3. Replace terms per the glossary below (left → right)\n\
+Do not change meaning, wording, or add/remove information.\n\n\
+Example:\nInput: um, well, we used the transofrmer model\nOutput: we used the transformer model";
 
 impl PolishWorker {
     pub fn start(
@@ -76,11 +82,15 @@ impl PolishWorker {
         &self,
         text: String,
         language: String,
+        terms: Vec<String>,
+        context: String,
     ) -> Receiver<Result<String, String>> {
         let (reply, recv) = channel();
         let _ = self.tx.send(PolishCmd::Polish {
             text,
             language,
+            terms,
+            context,
             reply,
         });
         recv
@@ -119,6 +129,8 @@ fn worker_loop(
             PolishCmd::Polish {
                 text,
                 language,
+                terms,
+                context,
                 reply,
             } => {
                 // MLX 非线程安全: 与 ASR 线程串行化
@@ -150,7 +162,7 @@ fn worker_loop(
                     }
                 }
                 let t0 = std::time::Instant::now();
-                let result = polish(&mut state.as_mut().unwrap(), &text, &language);
+                let result = polish(&mut state.as_mut().unwrap(), &text, &language, &terms, &context);
                 let elapsed = t0.elapsed().as_secs_f32();
                 match &result {
                     Ok((out, tokens)) => {
@@ -285,6 +297,8 @@ fn polish(
     state: &mut PolishModel,
     text: &str,
     language: &str,
+    terms: &[String],
+    context: &str,
 ) -> Result<(String, usize), String> {
     // "Auto" 语言识别: 按转写文本的书写系统选择润色提示词
     let use_zh = if language == "Chinese" {
@@ -297,9 +311,72 @@ fn polish(
     };
     let system = if use_zh { ZH_SYSTEM } else { EN_SYSTEM };
     let max_tokens = (text.chars().count() * 2).clamp(512, 2048);
-    let user_msg = format!("{system}\n\n待整理文本（引号内）：\n\"{text}\"\n\n请直接输出整理后的文本：");
+
+    // L1: 术语对照表注入 (错误|正确 配对 + 需保护的术语, 最多 30 条)
+    let glossary = build_glossary(terms, use_zh);
+
+    // L2: 上下文受限 — 附带上文(仅供参考, 不得修改)
+    let mut user_msg = String::new();
+    user_msg.push_str(system);
+    if !context.trim().is_empty() {
+        let ctx = if context.chars().count() > 300 {
+            context.chars().take(300).collect::<String>()
+        } else {
+            context.to_string()
+        };
+        user_msg.push_str("\n\n上文（仅供参考，不要修改）：\n");
+        user_msg.push_str(&ctx);
+    }
+    user_msg.push_str("\n\n当前段（引号内）：\n\"");
+    user_msg.push_str(text);
+    user_msg.push('"');
+    if !glossary.is_empty() {
+        user_msg.push_str("\n\n术语对照表（左侧→右侧）：\n");
+        user_msg.push_str(&glossary);
+    }
+    user_msg.push_str("\n\n请仅修正当前段，直接输出修正后的文本：");
+
     let (out, tokens) = run_llm(state, &user_msg, max_tokens)?;
     Ok((clean_output(&out), tokens))
+}
+
+/// 构建术语对照表文本: "错误|正确" 成对 → 左侧→右侧; 单独术语 → 保留清单
+fn build_glossary(terms: &[String], zh: bool) -> String {
+    if terms.is_empty() {
+        return String::new();
+    }
+    let mut pairs: Vec<String> = Vec::new();
+    let mut keep: Vec<String> = Vec::new();
+    for raw in terms {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        if let Some((w, r)) = raw.split_once('|') {
+            pairs.push(format!("{}→{}", w.trim(), r.trim()));
+        } else {
+            keep.push(raw.to_string());
+        }
+        if pairs.len() >= 30 {
+            break;
+        }
+    }
+    let mut out = String::new();
+    if !pairs.is_empty() {
+        out.push_str(&pairs.join("\n"));
+    }
+    if !keep.is_empty() {
+        let k = keep.into_iter().take(30).collect::<Vec<_>>().join("、");
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        if zh {
+            out.push_str(&format!("必须保留的术语：{k}"));
+        } else {
+            out.push_str(&format!("Terms that must be preserved: {k}"));
+        }
+    }
+    out
 }
 
 fn translate(
@@ -495,5 +572,28 @@ mod tests {
             clean_output("好的，以下是译文：译文：结果。"),
             "结果。"
         );
+    }
+}
+
+#[cfg(test)]
+mod glossary_tests {
+    use super::*;
+
+    #[test]
+    fn glossary_pairs_and_keep() {
+        let terms = vec![
+            "神剑网络|神经网络".to_string(),
+            "相量|向量".to_string(),
+            "深度学习".to_string(),
+        ];
+        let g = build_glossary(&terms, true);
+        assert!(g.contains("神剑网络→神经网络"));
+        assert!(g.contains("相量→向量"));
+        assert!(g.contains("必须保留的术语：深度学习"));
+    }
+
+    #[test]
+    fn glossary_empty() {
+        assert_eq!(build_glossary(&[], true), "");
     }
 }

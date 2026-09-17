@@ -612,25 +612,46 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                             if let Ok(mut segs) = state.segments.lock() {
                                                 segs.push(seg);
                                             }
-                                            // 增强(润色/翻译)在后台异步执行, 完成后广播更新
-                                            if enhance_mode == "polish" || enhance_mode == "translate" {
-                                                let st = state.clone();
-                                                let mode = enhance_mode.clone();
-                                                let tgt = target_lang.clone();
-                                                let src_lang_clone = src_lang.clone();
-                                                tokio::spawn(async move {
-                                                    let st2 = st.clone();
-                                                    let mode2 = mode.clone();
-                                                    let result = tokio::task::spawn_blocking(move || {
-                                                        let rx = if mode2 == "translate" {
-                                                            st2.polish.translate(text.clone(), tgt)
-                                                        } else {
-                                                            st2.polish.polish(text.clone(), "Auto".to_string())
-                                                        };
-                                                        rx.recv().ok().and_then(|r| r.ok())
-                                                    })
-                                                    .await
-                                                    .unwrap_or(None);
+                                             // 增强(润色/翻译)在后台异步执行, 完成后广播更新
+                                             if enhance_mode == "polish" || enhance_mode == "translate" {
+                                                 let st = state.clone();
+                                                 let mode = enhance_mode.clone();
+                                                 let tgt = target_lang.clone();
+                                                 let src_lang_clone = src_lang.clone();
+                                                 // L2: 上文上下文(前2段, 优先润色后文本)
+                                                 let context = {
+                                                     let segs = st.segments.lock().unwrap_or_else(|e| e.into_inner());
+                                                     let pos = segs.iter().position(|s| s.id == id).unwrap_or(segs.len());
+                                                     let start = pos.saturating_sub(2);
+                                                     segs[start..pos]
+                                                         .iter()
+                                                         .map(|s| {
+                                                             s.polished.clone().unwrap_or_else(|| s.text.clone())
+                                                         })
+                                                         .collect::<Vec<_>>()
+                                                         .join("\n")
+                                                 };
+                                                 let terms_clone = terms.clone();
+                                                 tokio::spawn(async move {
+                                                     let st2 = st.clone();
+                                                     let mode2 = mode.clone();
+                                                     let terms2 = terms_clone.clone();
+                                                     let ctx2 = context.clone();
+                                                     let result = tokio::task::spawn_blocking(move || {
+                                                         let rx = if mode2 == "translate" {
+                                                             st2.polish.translate(text.clone(), tgt)
+                                                         } else {
+                                                             st2.polish.polish(
+                                                                 text.clone(),
+                                                                 "Auto".to_string(),
+                                                                 terms2,
+                                                                 ctx2,
+                                                             )
+                                                         };
+                                                         rx.recv().ok().and_then(|r| r.ok())
+                                                     })
+                                                     .await
+                                                     .unwrap_or(None);
                                                     match result {
                                                         Some(out) if !out.trim().is_empty() => {
                                                             if let Ok(mut segs) = st.segments.lock() {
